@@ -1,0 +1,22 @@
+<% s = RedmineNiimbotLabels.settings %>
+<p>
+  <label for="settings_width_mm"><%= l(:field_niimbot_labels_width_mm) %></label>
+  <%= number_field_tag 'settings[width_mm]', s[:width_mm], id: 'settings_width_mm', min: 10, max: 100 %>
+</p>
+<p>
+  <label for="settings_height_mm"><%= l(:field_niimbot_labels_height_mm) %></label>
+  <%= number_field_tag 'settings[height_mm]', s[:height_mm], id: 'settings_height_mm', min: 10, max: 100 %>
+</p>
+<p>
+  <label for="settings_density"><%= l(:field_niimbot_labels_density) %></label>
+  <%= number_field_tag 'settings[density]', s[:density], id: 'settings_density', min: 1, max: 5 %>
+  <em class="info"><%= l(:text_niimbot_labels_density_hint) %></em>
+</p>
+<p>
+  <label for="settings_show_subject"><%= l(:field_niimbot_labels_show_subject) %></label>
+  <%= hidden_field_tag 'settings[show_subject]', '0', id: nil %>
+  <%= check_box_tag 'settings[show_subject]', '1', s[:show_subject], id: 'settings_show_subject' %>
+</p>
+<p>
+  <em class="info"><%= l(:text_niimbot_labels_host_hint, url: RedmineNiimbotLabels.base_url) %></em>
+</p>

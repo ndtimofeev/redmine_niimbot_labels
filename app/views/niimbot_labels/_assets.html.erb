@@ -1,0 +1,22 @@
+<% content_for :header_tags do %>
+  <%= javascript_include_tag niimbot_labels_script_path(v: RedmineNiimbotLabels.javascript_digest), defer: true %>
+  <style>
+    .niimbot-preview { border: 1px solid #ccc; image-rendering: pixelated; max-width: 100%; height: auto; display: block; }
+    .niimbot-issue { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 8px 0; }
+    .niimbot-issue .niimbot-preview { width: 144px; }
+    .niimbot-issue-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+    .niimbot-status, .niimbot-message, .niimbot-done { color: #555; }
+    .niimbot-error { color: #c22; }
+    .niimbot-printer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .niimbot-printer-status { font-weight: bold; }
+    .niimbot-add { display: flex; gap: 6px; margin: 12px 0; }
+    .niimbot-add input { width: 10em; }
+    .niimbot-queue { list-style: none; padding: 0; margin: 0; }
+    .niimbot-item { display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 8px 0; border-top: 1px solid #e5e5e5; }
+    .niimbot-item .niimbot-preview { width: 192px; }
+    .niimbot-item-info { display: flex; flex-direction: column; gap: 6px; min-width: 12em; flex: 1; }
+    .niimbot-item-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .niimbot-item-controls input { width: 4em; }
+    .niimbot-page button { min-height: 2.4em; padding: 0 1em; }
+  </style>
+<% end %>

@@ -1,0 +1,15 @@
+<% if User.current.logged? %>
+  <%= render partial: 'niimbot_labels/assets' %>
+  <%= tag.div class: 'niimbot-issue', data: {
+        niimbot_issue: true,
+        config: RedmineNiimbotLabels.client_config.to_json,
+        label: RedmineNiimbotLabels.label(issue).to_json
+      } do %>
+    <canvas class="niimbot-preview"></canvas>
+    <div class="niimbot-issue-actions">
+      <button type="button" class="niimbot-print"><%= l(:button_niimbot_labels_print) %></button>
+      <span class="niimbot-status"></span>
+      <%= link_to l(:link_niimbot_labels_queue), niimbot_labels_path(ids: issue.id) %>
+    </div>
+  <% end %>
+<% end %>

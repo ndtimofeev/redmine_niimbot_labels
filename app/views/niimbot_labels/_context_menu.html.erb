@@ -1,0 +1,7 @@
+<% if User.current.logged? && issues.present? %>
+  <li>
+    <%= context_menu_link l(:label_niimbot_labels_print_selected),
+                          niimbot_labels_path(ids: issues.map(&:id).join(',')),
+                          class: 'icon icon-print' %>
+  </li>
+<% end %>
