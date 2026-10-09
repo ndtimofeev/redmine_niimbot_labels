@@ -1,12 +1,13 @@
 // End-to-end check against a running Redmine with this plugin and a fake B1
 // (fake_b1.js) standing in for navigator.bluetooth. See README, "Tests".
 //
-//   REDMINE_URL=http://localhost:3000 REDMINE_PASSWORD=... \
+//   bin/rails runner plugins/redmine_niimbot_labels/test/e2e/seed.rb
+//   REDMINE_URL=http://localhost:3000 \
 //   HTML5_QRCODE=../organikum_qr_scanner/assets/javascripts/html5-qrcode.min.js \
-//   node test/e2e/run.js
+//   node plugins/redmine_niimbot_labels/test/e2e/run.js
 //
-// Expects issues #1, #2, #3 visible to the admin user, #999 missing, project
-// "sklad", Host name localhost:3000 and protocol http.
+// Uses the data seed.rb creates: project "sklad" with the module (#1-#3),
+// "office" without it (#4), admin/admin12345 and ivan/ivan12345 (Developer).
 const {chromium, devices} = require(process.env.PLAYWRIGHT || 'playwright');
 const fs = require('fs');
 const path = require('path');
@@ -36,10 +37,10 @@ const WAKE = `(() => {
   };
 })();`;
 
-async function login(page) {
+async function login(page, user = 'admin', password = 'admin12345') {
   await page.goto(BASE + '/login');
-  await page.fill('#username', 'admin');
-  await page.fill('#password', process.env.REDMINE_PASSWORD || 'admin');
+  await page.fill('#username', user);
+  await page.fill('#password', password);
   await page.click('#login-submit');
   await page.waitForLoadState('load');
 }
@@ -129,11 +130,12 @@ function savePng(dataUrl, name) {
   await dp.click('tr#issue-3 td.status', {button: 'right'});
   await dp.waitForSelector('#context-menu a[href*="niimbot_labels"]');
   const href = await dp.getAttribute('#context-menu a[href*="niimbot_labels"]', 'href');
-  check('context menu links to the print page with the selected issues', /ids=(3%2C1|1%2C3)/.test(href), href);
+  check('context menu links to the project print page with the selected issues',
+        /^\/projects\/sklad\/niimbot_labels\?ids=(3%2C1|1%2C3)$/.test(href), href);
   await dp.screenshot({path: path.join(OUT, 'context-menu.png')});
 
   // ---- print page
-  await page.goto(BASE + '/niimbot_labels?ids=1,3');
+  await page.goto(BASE + '/projects/sklad/niimbot_labels?ids=1,3');
   await page.waitForSelector('.niimbot-item');
   check('print page lists the two issues', (await page.$$('.niimbot-item')).length === 2);
   check('print buttons disabled before connecting', await page.isDisabled('.niimbot-print-all'));
@@ -187,12 +189,70 @@ function savePng(dataUrl, name) {
   // ---- server side
   const anon = await browser.newContext();
   const a = await anon.newPage();
-  let resp = await a.goto(BASE + '/niimbot_labels/script?v=1');
+  let resp;
+  resp = await a.goto(BASE + '/niimbot_labels/script?v=1');
   check('script is served to anyone, cacheable', resp.status() === 200 && /max-age=\d{8}, public/.test(resp.headers()['cache-control']), resp.headers()['cache-control']);
   resp = await a.goto(BASE + '/niimbot_labels/issues/1');
   check('label JSON requires login', resp.status() === 401 || /login/.test(a.url()), [resp.status(), a.url()]);
   resp = await page.goto(BASE + '/niimbot_labels/issues/999');
   check('missing issue answers 404 JSON', resp.status() === 404, await resp.text());
+
+  // ---- module and permission scoping
+  await dp.goto(BASE + '/projects/sklad');
+  check('project menu has "label printing" where the module is on', await dp.locator('#main-menu a.niimbot-labels').count() === 1);
+  await dp.goto(BASE + '/projects/office');
+  check('...and not where it is off', await dp.locator('#main-menu a.niimbot-labels').count() === 0);
+  resp = await dp.goto(BASE + '/projects/office/niimbot_labels');
+  check('print page of a project without the module answers 403', resp.status() === 403, resp.status());
+  await dp.goto(BASE + '/issues/4');
+  check('no print button on an issue of a project without the module', await dp.locator('.niimbot-issue').count() === 0);
+  resp = await dp.goto(BASE + '/niimbot_labels/issues/4');
+  check('label JSON of such an issue answers 403', resp.status() === 403, await resp.text());
+  await dp.goto(BASE + '/projects/sklad/niimbot_labels?ids=1,4');
+  await dp.waitForSelector('.niimbot-item');
+  check('print page drops issues of projects without the module and says so',
+        (await dp.$$('.niimbot-item')).length === 1 && /#4/.test(await dp.textContent('p.warning')), await dp.textContent('p.warning'));
+  await dp.fill('.niimbot-add input', '4');
+  await dp.press('.niimbot-add input', 'Enter');
+  await dp.waitForFunction(() => document.querySelector('.niimbot-message').classList.contains('niimbot-error'));
+  check('adding such an issue by number is refused', (await dp.$$('.niimbot-item')).length === 1, await dp.textContent('.niimbot-message'));
+  await dp.goto(BASE + '/issues?set_filter=1&sort=id');
+  await dp.check('tr#issue-4 input[type=checkbox]');
+  await dp.click('tr#issue-4 td.status', {button: 'right'});
+  await dp.waitForSelector('#context-menu ul');
+  check('no context menu item when only issues without the module are selected',
+        await dp.locator('#context-menu a[href*="niimbot_labels"]').count() === 0);
+  await dp.keyboard.press('Escape');
+  await dp.goto(BASE + '/issues?set_filter=1&sort=id');
+  await dp.check('tr#issue-1 input[type=checkbox]');
+  await dp.check('tr#issue-4 input[type=checkbox]');
+  await dp.click('tr#issue-1 td.status', {button: 'right'});
+  await dp.waitForSelector('#context-menu a[href*="niimbot_labels"]');
+  const mixed = await dp.getAttribute('#context-menu a[href*="niimbot_labels"]', 'href');
+  check('mixed selection keeps only printable issues', mixed === '/projects/sklad/niimbot_labels?ids=1', mixed);
+
+  // A member's access follows the role permission.
+  const member = await browser.newContext({locale: 'ru-RU'});
+  const mp = await member.newPage();
+  await login(mp, 'ivan', 'ivan12345');
+  await mp.goto(BASE + '/issues/1');
+  check('member with the permission sees the print button', await mp.locator('.niimbot-issue').count() === 1);
+  const setPermission = async (on) => {
+    await dp.goto(BASE + '/roles');
+    await dp.click('table.roles a:text("Разработчик")');
+    const box = dp.locator('input[name="role[permissions][]"][value="print_issue_labels"]');
+    if (on) await box.check(); else await box.uncheck();
+    await dp.click('input[type=submit][name=commit]');
+    await dp.waitForLoadState('load');
+  };
+  await setPermission(false);
+  await mp.goto(BASE + '/issues/1');
+  check('without the permission the button is gone', await mp.locator('.niimbot-issue').count() === 0);
+  resp = await mp.goto(BASE + '/projects/sklad/niimbot_labels');
+  check('...and the print page answers 403', resp.status() === 403, resp.status());
+  await setPermission(true);
+  await mp.goto(BASE + '/issues/1');
+  check('permission back, button back', await mp.locator('.niimbot-issue').count() === 1);
 
   check('no JS errors on pages', errors.length === 0, errors);
   await browser.close();

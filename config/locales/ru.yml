@@ -17,6 +17,10 @@ ru:
   text_niimbot_labels_host_hint: "QR-коды ведут на %{url}/issues/<номер>. Адрес берётся из Администрирование → Настройки → Общие (имя хоста и протокол)."
   warning_niimbot_labels_host_mismatch: "QR-коды будут вести на хост %{host}, а не на тот, через который открыта эта страница. Проверьте имя хоста и протокол в Администрирование → Настройки → Общие."
   error_niimbot_labels_issue_not_found: "Задача #%{id} не найдена или недоступна"
+  project_module_niimbot_labels: "Печать этикеток"
+  permission_print_issue_labels: "Печать этикеток задач"
+  error_niimbot_labels_not_allowed: "Задача #%{id}: печать этикеток не включена в проекте «%{project}» или недоступна вам"
+  warning_niimbot_labels_skipped: "Пропущены задачи %{ids}: не найдены, или в их проектах печать этикеток выключена или недоступна вам."
   niimbot_labels_js:
     print: "Печать"
     print_all: "Печатать все"

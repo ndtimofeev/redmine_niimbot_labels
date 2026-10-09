@@ -1,5 +1,5 @@
 module RedmineNiimbotLabels
-  VERSION = '0.1.0'.freeze
+  VERSION = '0.2.0'.freeze
 
   # Matches the 50x30 mm labels sold for the B1.
   DEFAULT_SETTINGS = {
@@ -8,6 +8,13 @@ module RedmineNiimbotLabels
     'density' => '3',
     'show_subject' => '1'
   }.freeze
+
+  # Whether the current user may print the label of this issue: the issue's
+  # project has the module enabled and one of the user's roles there has
+  # :print_issue_labels. Admins pass whenever the module is enabled.
+  def self.printable?(issue, user = User.current)
+    user.logged? && user.allowed_to?(:print_issue_labels, issue.project)
+  end
 
   # Everything the browser needs to draw and print the label of one issue.
   # The QR matrix is computed here (rqrcode ships with Redmine for 2FA), so

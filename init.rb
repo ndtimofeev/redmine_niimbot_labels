@@ -10,13 +10,16 @@ Redmine::Plugin.register :redmine_niimbot_labels do
 
   settings default: RedmineNiimbotLabels::DEFAULT_SETTINGS,
            partial: 'settings/niimbot_labels_settings'
-end
 
-# The print page is not tied to a project: it collects issues from anywhere,
-# so it sits in the same cross-project sidebar as "Issues" and "Gantt".
-Redmine::MenuManager.map :application_menu do |menu|
-  menu.push :niimbot_labels,
-            {controller: 'niimbot_labels', action: 'index'},
-            caption: :label_niimbot_labels,
-            if: proc { User.current.logged? && User.current.allowed_to?(:view_issues, nil, global: true) }
+  # A project module: label printing shows up only in projects that have
+  # "Label printing" ticked in Settings > Modules, and only for roles with
+  # the permission below (see db/migrate for who gets it on install).
+  project_module :niimbot_labels do
+    # read: printing changes nothing, so it also works in closed projects.
+    permission :print_issue_labels, {niimbot_labels: [:index, :show]}, read: true
+  end
+
+  menu :project_menu, :niimbot_labels,
+       {controller: 'niimbot_labels', action: 'index'},
+       param: :project_id, caption: :label_niimbot_labels, after: :issues
 end

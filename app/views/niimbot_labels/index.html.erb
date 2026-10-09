@@ -3,6 +3,10 @@
 
 <h2><%= l(:label_niimbot_labels) %></h2>
 
+<% if @skipped_ids.any? %>
+  <p class="warning"><%= l(:warning_niimbot_labels_skipped, ids: @skipped_ids.map {|id| "##{id}"}.join(', ')) %></p>
+<% end %>
+
 <% if (host = RedmineNiimbotLabels.host_mismatch(request)) %>
   <p class="warning"><%= l(:warning_niimbot_labels_host_mismatch, host: host) %></p>
 <% end %>

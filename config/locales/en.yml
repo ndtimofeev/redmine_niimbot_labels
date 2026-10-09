@@ -17,6 +17,10 @@ en:
   text_niimbot_labels_host_hint: "QR codes point to %{url}/issues/<id>. The address comes from Administration > Settings > General (host name and protocol)."
   warning_niimbot_labels_host_mismatch: "QR codes will point to host %{host}, not the one this page was opened from. Check host name and protocol in Administration > Settings > General."
   error_niimbot_labels_issue_not_found: "Issue #%{id} not found or not visible"
+  project_module_niimbot_labels: "Label printing"
+  permission_print_issue_labels: "Print issue labels"
+  error_niimbot_labels_not_allowed: "Issue #%{id}: label printing is not enabled in project \"%{project}\" or not allowed for you"
+  warning_niimbot_labels_skipped: "Skipped issues %{ids}: not found, or label printing is disabled or not allowed in their projects."
   niimbot_labels_js:
     print: "Print"
     print_all: "Print all"
