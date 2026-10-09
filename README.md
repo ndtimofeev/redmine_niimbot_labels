@@ -19,18 +19,27 @@ hardware.
 
 ## Printing
 
-On an issue page, the sidebar has a **Label** block with **Print label**. On
-a phone Redmine moves the sidebar into the menu behind the hamburger button,
-so the button is there.
+On an issue page, the sidebar has a **Label** block with **Print label…**.
+On a phone Redmine moves the sidebar into the menu behind the hamburger
+button, so the link is there; tapping it closes that menu.
 
-- The first press on a freshly loaded page opens Chrome's device chooser;
-  pick the B1 and the label prints.
-- Further presses on the same page reuse the connection. Redmine reloads the
-  page on every navigation, so on the next issue Chrome asks for the printer
-  again.
-- Under the button: what is going on ("Pick the printer in the list…",
-  "Printing…"), then "Printed" with the printer name, battery and, if so,
-  "lid open" / "no labels"; or the error.
+The link opens a dialog with:
+
+- **Printer** - "not connected" with a **Connect** button, or the printer
+  name with **Disconnect**. Once connected: battery, lid (closed / open) and
+  labels (loaded, how many are left on the roll according to its RFID tag,
+  or none). Problems are shown in red. The state refreshes every 2 seconds.
+- **Copies** - 1 to 99, with − / + buttons so a phone needs no keyboard.
+- **Print** - connects first if needed (Chrome's device chooser), then prints
+  all copies as one job, showing "Printing… 2 of 3", then "Printed: 3".
+- **Cancel** (**Close** after printing), the × or Escape close the dialog.
+
+The printer stays connected while the page is open, so reopening the dialog
+or printing again does not ask for it. Redmine reloads the page on every
+navigation, so on the next issue Chrome asks for the printer again.
+
+On phones (Redmine's mobile layout, below 900 px) the dialog takes the
+screen width and its buttons are at least 44 px high.
 
 ## Where it shows up
 
@@ -40,7 +49,7 @@ so the button is there.
   labels* decides who may print where it is on. Installing the plugin gives
   this permission to every role that can view issues (except Anonymous), so
   ticking the module is enough to start; take it away from roles as needed.
-- Where both hold, the issue page sidebar has the button. Everywhere else
+- Where both hold, the issue page sidebar has the link. Everywhere else
   (other projects, issue lists, the new issue form) there is no trace of the
   plugin.
 - Closed projects keep printing: the permission is a read permission, as
@@ -60,7 +69,7 @@ so the button is there.
 - **Administration > Settings > General > Host name and Protocol** set to the
   address people actually use. QR codes are built from them (like links in
   Redmine's emails), not from whatever address the page was opened at; admins
-  get a warning under the button when the two differ.
+  get a warning under the link when the two differ.
 
 ## Install
 
@@ -91,14 +100,18 @@ whether to print the subject.
   non-white pixel.
 - **Size.** The side across the print head is cut to its width (384 dots,
   48 mm on the B1): a 50 x 30 mm label is drawn as 384 x 240 dots.
-- **One print job per press**, the way NiimBlue does it: heartbeat polling is
-  paused meanwhile and `printEnd` always runs.
-- **The button is a sidebar link**, rendered by the
-  `view_issues_sidebar_issues_bottom` hook, only on the page of a saved issue
-  (the same sidebar is shown on issue lists). The click is handled by a
-  delegated listener, as on a phone Redmine moves the sidebar into the
-  hamburger menu. Redmine's icon sprite has no printer, so the Tabler
-  "printer" icon is inlined.
+- **One print job per press**, all copies in it, the way NiimBlue does it:
+  heartbeat polling is paused meanwhile and `printEnd` always runs.
+- **The link** is rendered by the `view_issues_sidebar_issues_bottom` hook,
+  only on the page of a saved issue (the same sidebar is shown on issue
+  lists). Its click is handled by a delegated listener, as on a phone Redmine
+  moves the sidebar into the hamburger menu. Redmine's icon sprite has no
+  printer, so the Tabler "printer" icon is inlined.
+- **The dialog** is Redmine's own `showModal` (a jQuery UI dialog, like "Add
+  watchers"), so it looks and closes like the rest of Redmine, and Redmine's
+  mobile styles already fit it to the screen. Printer state comes from
+  niimbluelib's heartbeat (battery, lid, labels) and the roll's RFID tag
+  (labels left).
 - **Script delivery.** niimbluelib and `niimbot_labels.js` are served together
   by `GET /niimbot_labels/script?v=<digest>` with a one-year cache header,
   rather than through the plugin asset pipeline (which needs
@@ -118,7 +131,7 @@ this yet.
 
 `test/e2e/seed.rb` creates the test data (a project with the module, one
 without, a Developer member); `test/e2e/run.js` (Playwright) drives a running
-Redmine, in a Pixel 7 profile (button in the hamburger menu) and on desktop,
+Redmine, in a Pixel 7 profile (link in the hamburger menu, dialog) and on desktop,
 with `test/e2e/fake_b1.js` replacing `navigator.bluetooth` by a simulated B1
 (answers taken from a real B1 dump in niimbluelib's tests). It rebuilds the
 bitmap the "printer" received and decodes its QR code with
@@ -134,10 +147,11 @@ See the header of `run.js` for how to run it.
 - `lib/redmine_niimbot_labels.rb` - label data (URL, QR rows), settings,
   script bundle, the printer icon; `lib/redmine_niimbot_labels/hooks.rb` -
   the sidebar hook.
-- `app/views/niimbot_labels/_sidebar.html.erb` - the Label block.
+- `app/views/niimbot_labels/_sidebar.html.erb` - the Label block and the
+  dialog.
 - `app/controllers/niimbot_labels_controller.rb` - serves the script.
 - `assets/javascripts/niimbot_labels.js` - drawing, the `Printer` wrapper
-  around niimbluelib, the button.
+  around niimbluelib, the dialog.
 - `assets/javascripts/niimbluelib.min.js` + `niimbluelib.LICENSE` - niimbluelib
   0.47.0 UMD build from npm, unmodified.
 

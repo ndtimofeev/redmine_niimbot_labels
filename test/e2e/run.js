@@ -59,17 +59,22 @@ function savePng(dataUrl, name) {
   fs.writeFileSync(path.join(OUT, name), Buffer.from(dataUrl.split(',')[1], 'base64'));
 }
 
-const fakeState = (page) => page.evaluate(() => ({chooser: window.__fakeB1.chooserCount, pages: window.__fakeB1.pages.length, density: window.__fakeB1.density}));
-const statusText = (page) => page.textContent('.niimbot-sidebar .niimbot-status');
-const waitStatus = (page, re) => page.waitForFunction(
-  (src) => new RegExp(src).test(document.querySelector('.niimbot-sidebar .niimbot-status').textContent),
+const fakeState = (page) => page.evaluate(() => ({
+  chooser: window.__fakeB1.chooserCount, pages: window.__fakeB1.pages.map((p) => p.copies),
+  total: window.__fakeB1.totalPages, density: window.__fakeB1.density}));
+const dialog = '.ui-dialog:has(#niimbot-modal)';
+const text = (page, sel) => page.textContent('#niimbot-modal ' + sel).then((s) => s.trim());
+const waitMessage = (page, re) => page.waitForFunction(
+  (src) => new RegExp(src).test(document.querySelector('#niimbot-modal .niimbot-message').textContent),
   re.source, {timeout: 15000});
+const idle = (page) => page.waitForFunction(() => !window.NiimbotLabels.printer.busy &&
+  !document.querySelector('#niimbot-modal .niimbot-print').disabled, null, {timeout: 15000});
 
 (async () => {
   const browser = await chromium.launch();
   const errors = [];
 
-  // ---- phone: the sidebar lives behind the hamburger button
+  // ---- phone: the link lives behind the hamburger button, the dialog on top
   const phone = await browser.newContext({...devices['Pixel 7'], locale: 'ru-RU'});
   await phone.addInitScript(FAKE);
   const page = await phone.newPage();
@@ -77,41 +82,79 @@ const waitStatus = (page, re) => page.waitForFunction(
   await login(page);
 
   await page.goto(BASE + '/issues/1');
-  check('no label widget in the issue body any more', await page.locator('#content .niimbot-issue, #content canvas').count() === 0);
+  check('no label widget in the issue body', await page.locator('#content .niimbot-issue, #content canvas').count() === 0);
   await page.click('.js-flyout-menu-toggle-button');
-  await page.waitForSelector('.flyout-menu .niimbot-sidebar .niimbot-print', {state: 'visible'});
-  check('on a phone the button is in the hamburger menu', true);
+  await page.waitForSelector('.flyout-menu .niimbot-open', {state: 'visible'});
   await page.screenshot({path: path.join(OUT, 'phone-menu.png')});
-  await page.click('.flyout-menu .niimbot-print');
-  await waitStatus(page, /Напечатано/);
+  await page.click('.flyout-menu .niimbot-open');
+  await page.waitForSelector(dialog, {state: 'visible'});
+  check('the link opens the dialog and closes the hamburger menu',
+        !(await page.evaluate(() => document.documentElement.classList.contains('flyout-is-active'))));
+  check('dialog title names the issue', /#1/.test(await page.textContent(dialog + ' .ui-dialog-title')), await page.textContent(dialog + ' .ui-dialog-title'));
+  check('printer shown as not connected, details hidden',
+        (await text(page, '.niimbot-name')) === 'не подключён' && !(await page.isVisible('#niimbot-modal .niimbot-battery')));
+  const box = await page.locator(dialog).boundingBox();
+  check('dialog fits the phone screen', box.width <= devices['Pixel 7'].viewport.width, box);
+  await page.screenshot({path: path.join(OUT, 'phone-dialog-disconnected.png')});
+
+  await page.click('#niimbot-modal .niimbot-minus');
+  check('copies never go below 1', (await page.inputValue('#niimbot-copies')) === '1');
+  await page.click('#niimbot-modal .niimbot-plus');
+  await page.click('#niimbot-modal .niimbot-plus');
+  check('plus button counts up', (await page.inputValue('#niimbot-copies')) === '3');
+  await page.click('#niimbot-modal .niimbot-print');
+  await waitMessage(page, /Напечатано: 3/);
+  await idle(page);
   let fake = await fakeState(page);
-  check('first press opens the chooser once and prints one label', fake.chooser === 1 && fake.pages === 1, fake);
+  check('"Print" connects (chooser once) and prints 3 copies in one job', fake.chooser === 1 && fake.pages.join() === '3' && fake.total === 3, fake);
   check('density from settings (3) is sent', fake.density === 3, fake.density);
   const decoded = await decodePrinted(page, 0);
   savePng(decoded.png, 'printed-issue-1.png');
   check('printed label is 384x240 dots (50x30 mm on a 48 mm head)', decoded.cols === 384 && decoded.rows === 240, [decoded.cols, decoded.rows]);
   check('QR on the printed label decodes to the issue URL', decoded.text === BASE + '/issues/1', decoded.text);
-  check('status shows printer and battery', /B1-.*заряд 100%/.test(await statusText(page)), await statusText(page));
-  await page.screenshot({path: path.join(OUT, 'phone-printed.png')});
+  const state = {
+    name: await text(page, '.niimbot-name'), battery: await text(page, '.niimbot-battery'),
+    lid: await text(page, '.niimbot-lid'), paper: await text(page, '.niimbot-paper')};
+  check('printer state: name, battery, lid, labels left', /^B1-/.test(state.name) && /%$/.test(state.battery) &&
+        /закрыта|открыта/.test(state.lid) && /осталось \d+ из \d+|вставлены|нет/.test(state.paper), state);
+  check('"Cancel" turned into "Close"', (await text(page, '.niimbot-close')) === 'Закрыть');
+  await page.screenshot({path: path.join(OUT, 'phone-dialog-printed.png')});
 
-  await page.click('.flyout-menu .niimbot-print');
-  await page.waitForFunction(() => window.__fakeB1.pages.length === 2 && !window.NiimbotLabels.printer.busy, null, {timeout: 15000});
-  check('second press on the same page reuses the connection', (await fakeState(page)).chooser === 1);
+  await page.click('#niimbot-modal .niimbot-close');
+  check('"Close" closes the dialog', !(await page.isVisible(dialog)));
+  await page.click('.js-flyout-menu-toggle-button');
+  await page.click('.flyout-menu .niimbot-open');
+  await page.waitForSelector(dialog, {state: 'visible'});
+  check('reopened dialog: still connected, message cleared, "Cancel" again',
+        /^B1-/.test(await text(page, '.niimbot-name')) && (await text(page, '.niimbot-message')) === '' &&
+        (await text(page, '.niimbot-close')) === 'Отмена');
+  await page.fill('#niimbot-copies', '150');
+  await page.click('#niimbot-modal .niimbot-print');
+  await waitMessage(page, /Напечатано: 99/);
+  await idle(page);
+  fake = await fakeState(page);
+  check('typed 150 is clamped to 99, no chooser on reprint', fake.chooser === 1 && fake.pages.join() === '3,99', fake);
 
   await page.evaluate(() => window.__fakeB1.dropConnection());
-  await waitStatus(page, /отключился/);
-  check('dropped connection is reported', true, await statusText(page));
-  await page.click('.flyout-menu .niimbot-print');
-  await waitStatus(page, /Напечатано/);
-  fake = await fakeState(page);
-  check('after a drop the next press asks for the printer again', fake.chooser === 2 && fake.pages === 3, fake);
+  await waitMessage(page, /отключился/);
+  check('dropped connection: reported, "Connect" back, details hidden',
+        await page.isVisible('#niimbot-modal .niimbot-connect') && !(await page.isVisible('#niimbot-modal .niimbot-battery')));
+  await page.evaluate(() => { window.__fakeB1.cancelChooser = true; });
+  await page.click('#niimbot-modal .niimbot-connect');
+  await waitMessage(page, /не выбран/);
+  check('closing the chooser says "no printer chosen"', true, await text(page, '.niimbot-message'));
+  await page.click('#niimbot-modal .niimbot-connect');
+  await page.waitForFunction(() => /^B1-/.test(document.querySelector('#niimbot-modal .niimbot-name').textContent));
+  check('"Connect" alone connects without printing', (await fakeState(page)).pages.length === 2);
+  await page.screenshot({path: path.join(OUT, 'phone-dialog-connected.png')});
 
   await page.goto(BASE + '/issues/3');
   await page.click('.js-flyout-menu-toggle-button');
-  await page.click('.flyout-menu .niimbot-print');
-  await waitStatus(page, /Напечатано/);
+  await page.click('.flyout-menu .niimbot-open');
+  await page.click('#niimbot-modal .niimbot-print');
+  await waitMessage(page, /Напечатано: 1/);
   fake = await fakeState(page);
-  check('another issue: new page, chooser again', fake.chooser === 1 && fake.pages === 1, fake);
+  check('another issue: new page, chooser again', fake.chooser === 1 && fake.pages.join() === '1', fake);
   const third = await decodePrinted(page, 0);
   savePng(third.png, 'printed-issue-3.png');
   check('...and its own URL in the QR', third.text === BASE + '/issues/3', third.text);
@@ -122,8 +165,12 @@ const waitStatus = (page, re) => page.waitForFunction(
   dp.on('pageerror', (e) => errors.push(e.message));
   await login(dp);
   await dp.goto(BASE + '/issues/1');
-  check('desktop: button in the sidebar', await dp.locator('#sidebar .niimbot-sidebar .niimbot-print').isVisible());
-  await dp.screenshot({path: path.join(OUT, 'desktop-issue.png')});
+  check('desktop: link in the sidebar', await dp.locator('#sidebar .niimbot-sidebar .niimbot-open').isVisible());
+  await dp.click('#sidebar .niimbot-open');
+  await dp.waitForSelector(dialog, {state: 'visible'});
+  await dp.screenshot({path: path.join(OUT, 'desktop-dialog.png')});
+  await dp.keyboard.press('Escape');
+  check('Escape closes the dialog', !(await dp.isVisible(dialog)));
   check('no host warning when host name matches', await dp.locator('.niimbot-warning').count() === 0);
   await dp.goto(BASE + '/projects/sklad/issues');
   check('not on issue lists (same sidebar)', await dp.locator('.niimbot-sidebar').count() === 0);
@@ -179,8 +226,11 @@ const waitStatus = (page, re) => page.waitForFunction(
   const p2 = await plain.newPage();
   await login(p2);
   await p2.goto(BASE + '/issues/1');
-  await p2.waitForFunction(() => document.querySelector('.niimbot-print').getAttribute('aria-disabled') === 'true');
-  check('without Web Bluetooth the button is disabled with an explanation', true, await statusText(p2));
+  await p2.click('#sidebar .niimbot-open');
+  await p2.waitForSelector(dialog, {state: 'visible'});
+  check('without Web Bluetooth: "Print" and "Connect" disabled, with an explanation',
+        await p2.isDisabled('#niimbot-modal .niimbot-print') && await p2.isDisabled('#niimbot-modal .niimbot-connect') &&
+        /недоступна/.test(await text(p2, '.niimbot-message')), await text(p2, '.niimbot-message'));
 
   // ---- script endpoint
   const anon = await browser.newContext();

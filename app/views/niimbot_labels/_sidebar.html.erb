@@ -4,29 +4,72 @@
   <% content_for :header_tags do %>
     <%= javascript_include_tag niimbot_labels_script_path(v: RedmineNiimbotLabels.javascript_digest), defer: true %>
     <style>
-      .niimbot-sidebar .niimbot-status { color: #555; margin-top: 4px; }
-      .niimbot-sidebar .niimbot-error, .niimbot-sidebar .niimbot-warning { color: #c22; }
-      .niimbot-sidebar .niimbot-print[aria-disabled="true"] { color: #999; pointer-events: none; }
-      /* On a phone the sidebar sits in the dark hamburger menu. */
-      .flyout-menu .niimbot-sidebar p { padding-inline: 8px; color: inherit; opacity: .85; }
-      .flyout-menu .niimbot-sidebar .niimbot-error,
-      .flyout-menu .niimbot-sidebar .niimbot-warning { color: #ffa8a8; opacity: 1; }
+      #niimbot-modal .niimbot-state { inline-size: 100%; border-collapse: collapse; margin-block-end: 12px; }
+      #niimbot-modal .niimbot-state th { text-align: start; font-weight: normal; color: #555; padding: 4px 12px 4px 0; white-space: nowrap; }
+      #niimbot-modal .niimbot-state td { padding: 4px 0; inline-size: 100%; }
+      #niimbot-modal .niimbot-state .niimbot-bad { color: #c22; font-weight: bold; }
+      #niimbot-modal .niimbot-state button { margin-inline-start: 8px; }
+      #niimbot-modal .niimbot-copies { display: flex; align-items: center; gap: 6px; margin-block: 12px; }
+      #niimbot-modal .niimbot-copies label { margin-inline-end: 6px; }
+      #niimbot-modal .niimbot-copies input { inline-size: 4em; text-align: center; }
+      #niimbot-modal .niimbot-copies button { min-inline-size: 2.4em; }
+      #niimbot-modal .niimbot-message { min-block-size: 1.4em; color: #555; }
+      #niimbot-modal .niimbot-message.niimbot-error { color: #c22; }
+      .niimbot-sidebar .niimbot-warning { color: #c22; }
+      .flyout-menu .niimbot-sidebar .niimbot-warning { padding-inline: 8px; color: #ffa8a8; }
+      /* Phones: bigger touch targets in the dialog. */
+      @media screen and (max-width: 899px) {
+        #niimbot-modal button, #niimbot-modal input { min-block-size: 44px; font-size: 1rem; }
+        #niimbot-modal .niimbot-copies button { min-inline-size: 44px; }
+        #niimbot-modal .niimbot-copies input { inline-size: 5em; }
+        #niimbot-modal p.buttons { display: flex; gap: 8px; }
+        #niimbot-modal p.buttons button { flex: 1; }
+      }
     </style>
   <% end %>
-  <%= tag.div class: 'niimbot-sidebar', data: {
-        config: RedmineNiimbotLabels.client_config.to_json,
-        label: RedmineNiimbotLabels.label(issue).to_json
-      } do %>
+  <div class="niimbot-sidebar">
     <h3><%= l(:label_niimbot_labels_sidebar) %></h3>
     <ul>
       <%# Redmine's icon sprite has no printer, so the icon (Tabler "printer",
           the set Redmine's own icons come from) is inlined. %>
-      <li><%= link_to RedmineNiimbotLabels::PRINTER_ICON + tag.span(l(:button_niimbot_labels_print), class: 'icon-label'),
-                      '#', class: 'niimbot-print icon', role: 'button' %></li>
+      <li><%= link_to RedmineNiimbotLabels::PRINTER_ICON + tag.span(l(:button_niimbot_labels_open), class: 'icon-label'),
+                      '#', class: 'niimbot-open icon', role: 'button' %></li>
     </ul>
-    <p class="niimbot-status" aria-live="polite"></p>
     <% if User.current.admin? && (host = RedmineNiimbotLabels.host_mismatch(request)) %>
       <p class="niimbot-warning"><%= l(:warning_niimbot_labels_host_mismatch, host: host) %></p>
     <% end %>
+  </div>
+
+  <%# Opened with Redmine's own showModal (a jQuery UI dialog), which moves it
+      out of the sidebar into <body>. %>
+  <%= tag.div id: 'niimbot-modal', style: 'display:none;', data: {
+        config: RedmineNiimbotLabels.client_config.to_json,
+        label: RedmineNiimbotLabels.label(issue).to_json
+      } do %>
+    <h3 class="title"><%= l(:label_niimbot_labels_modal_title, id: issue.id) %></h3>
+    <table class="niimbot-state">
+      <tr>
+        <th><%= l(:field_niimbot_labels_printer) %></th>
+        <td>
+          <span class="niimbot-name"></span>
+          <button type="button" class="niimbot-connect"><%= l(:button_niimbot_labels_connect) %></button>
+          <button type="button" class="niimbot-disconnect" hidden><%= l(:button_niimbot_labels_disconnect) %></button>
+        </td>
+      </tr>
+      <tr class="niimbot-connected-only"><th><%= l(:field_niimbot_labels_battery) %></th><td class="niimbot-battery"></td></tr>
+      <tr class="niimbot-connected-only"><th><%= l(:field_niimbot_labels_lid) %></th><td class="niimbot-lid"></td></tr>
+      <tr class="niimbot-connected-only"><th><%= l(:field_niimbot_labels_paper) %></th><td class="niimbot-paper"></td></tr>
+    </table>
+    <div class="niimbot-copies">
+      <label for="niimbot-copies"><%= l(:field_niimbot_labels_copies) %></label>
+      <button type="button" class="niimbot-minus" aria-label="−1">−</button>
+      <input type="number" id="niimbot-copies" min="1" max="99" value="1" inputmode="numeric">
+      <button type="button" class="niimbot-plus" aria-label="+1">+</button>
+    </div>
+    <p class="niimbot-message" aria-live="polite"></p>
+    <p class="buttons">
+      <button type="button" class="niimbot-print"><%= l(:button_niimbot_labels_print) %></button>
+      <button type="button" class="niimbot-close"><%= l(:button_cancel) %></button>
+    </p>
   <% end %>
 <% end %>

@@ -1,5 +1,5 @@
 module RedmineNiimbotLabels
-  VERSION = '0.3.0'.freeze
+  VERSION = '0.4.0'.freeze
 
   # Matches the 50x30 mm labels sold for the B1.
   DEFAULT_SETTINGS = {
@@ -91,7 +91,8 @@ module RedmineNiimbotLabels
   end
 
   JS_STRINGS = %w(
-    connecting printing printed error unsupported disconnected connected battery lid_open no_paper
+    not_connected connecting not_chosen unknown lid_closed lid_open paper_in paper_out paper_left
+    printing printed error unsupported disconnected cancel close
   ).freeze
 
   # Settings and translations for niimbot_labels.js, as one JSON-able hash.

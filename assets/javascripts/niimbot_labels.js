@@ -147,9 +147,13 @@
   // One Bluetooth connection to the printer. It lives as long as the page:
   // Redmine reloads the page on every click, so after moving to another issue
   // the printer has to be picked again.
+  function emptyState() {
+    return {connected: false, name: '', battery: null, lidClosed: null, paper: null, labelsLeft: null, labelsAll: null};
+  }
+
   function Printer() {
     this.client = null;
-    this.state = {connected: false, name: '', battery: null, lidClosed: null, paper: null};
+    this.state = emptyState();
     this.listeners = [];
     this.busy = false;
   }
@@ -176,7 +180,7 @@
     client.on('disconnect', function () {
       if (self.client !== client) return;
       self.client = null;
-      self.state = {connected: false, name: '', battery: null, lidClosed: null, paper: null};
+      self.state = emptyState();
       self.emit('disconnect');
     });
     client.on('heartbeat', function (e) {
@@ -186,6 +190,17 @@
       if (d.paperInserted !== undefined) self.state.paper = d.paperInserted;
       self.emit('heartbeat');
     });
+    // Read from the RFID tag of the label roll on connect and after printing.
+    client.on('rfidinfofetched', function (e) {
+      var r = e.info && e.info.labelRfidInfo;
+      if (r && r.tagPresent && r.allPaper > 0) {
+        self.state.labelsAll = r.allPaper;
+        self.state.labelsLeft = Math.max(r.allPaper - r.usedPaper, 0);
+      } else {
+        self.state.labelsAll = self.state.labelsLeft = null;
+      }
+      self.emit('rfid');
+    });
 
     var info = await client.connect();
     this.client = client;
@@ -194,6 +209,9 @@
     var printerInfo = client.getPrinterInfo();
     if (printerInfo.batteryPercents !== undefined) this.state.battery = printerInfo.batteryPercents;
     this.emit('connect');
+    // Lid and labels come with the heartbeat, polled every 2 s; ask once now
+    // so the dialog shows them right away.
+    await client.fetchHeartbeatData();
   };
 
   Printer.prototype.disconnect = async function () {
@@ -201,7 +219,7 @@
     if (!client) return;
     this.client = null;
     try { await client.disconnect(); } catch (e) { /* already gone */ }
-    this.state = {connected: false, name: '', battery: null, lidClosed: null, paper: null};
+    this.state = emptyState();
     this.emit('disconnect');
   };
 
@@ -250,78 +268,143 @@
     }
   };
 
-  function describe(state, t) {
-    var parts = [format(t.connected, {name: state.name || 'NIIMBOT'})];
-    if (state.battery !== null) parts.push(format(t.battery, {n: state.battery}));
-    if (state.lidClosed === false) parts.push(t.lid_open);
-    if (state.paper === false) parts.push(t.no_paper);
-    return parts.join(' · ');
-  }
+  // ------------------------------------------------------------------ dialog
 
-  // ---------------------------------------------------------------- sidebar
-
-  // "Print label" in the issue sidebar. The first press on a freshly loaded
-  // page opens Chrome's device chooser; later presses reuse the connection.
-  // The click is delegated because on a phone Redmine moves the sidebar into
-  // the hamburger menu.
+  // "Print label…" in the issue sidebar opens a dialog (Redmine's own
+  // showModal) with the printer state, the number of copies and "Print".
+  // The printer stays connected while the page is open, so reopening the
+  // dialog does not ask for it again.
   var printer = new Printer();
+  var modal = null;
 
-  function setStatus(box, text, isError) {
-    var status = box.querySelector('.niimbot-status');
-    status.textContent = text || '';
-    status.classList.toggle('niimbot-error', !!isError);
+  function $q(selector) { return modal.el.querySelector(selector); }
+
+  function message(text, isError) {
+    var el = $q('.niimbot-message');
+    el.textContent = text || '';
+    el.classList.toggle('niimbot-error', !!isError);
   }
 
-  function setBusy(box, busy) {
-    var link = box.querySelector('.niimbot-print');
-    if (busy) link.setAttribute('aria-disabled', 'true');
-    else link.removeAttribute('aria-disabled');
+  function copies() {
+    var n = parseInt($q('#niimbot-copies').value, 10);
+    return isNaN(n) ? 1 : Math.min(Math.max(n, 1), 99);
   }
 
-  async function printFrom(box) {
-    var config = JSON.parse(box.getAttribute('data-config'));
-    var label = JSON.parse(box.getAttribute('data-label'));
-    var t = config.strings;
-    if (printer.busy) return;
-    setBusy(box, true);
+  function cell(selector, text, bad) {
+    var el = $q(selector);
+    el.textContent = text;
+    el.classList.toggle('niimbot-bad', !!bad);
+  }
+
+  function refresh() {
+    if (!modal) return;
+    var t = modal.t, s = printer.state, connected = s.connected;
+    cell('.niimbot-name', connected ? (s.name || 'NIIMBOT') : t.not_connected, false);
+    $q('.niimbot-connect').hidden = connected;
+    $q('.niimbot-disconnect').hidden = !connected;
+    modal.el.querySelectorAll('.niimbot-connected-only').forEach(function (row) { row.hidden = !connected; });
+    if (connected) {
+      cell('.niimbot-battery', s.battery === null ? t.unknown : s.battery + '%', s.battery !== null && s.battery <= 25);
+      cell('.niimbot-lid', s.lidClosed === null ? t.unknown : (s.lidClosed ? t.lid_closed : t.lid_open), s.lidClosed === false);
+      var paper = t.unknown;
+      if (s.paper === false) paper = t.paper_out;
+      else if (s.labelsLeft !== null) paper = format(t.paper_left, {left: s.labelsLeft, all: s.labelsAll});
+      else if (s.paper === true) paper = t.paper_in;
+      cell('.niimbot-paper', paper, s.paper === false || s.labelsLeft === 0);
+    }
+    var supported = isSupported();
+    $q('.niimbot-connect').disabled = !supported || modal.working;
+    $q('.niimbot-print').disabled = !supported || modal.working;
+    $q('.niimbot-disconnect').disabled = modal.working;
+  }
+
+  function errorText(t, e) {
+    if (e && e.name === 'NotFoundError') return t.not_chosen;  // chooser closed
+    return format(t.error, {message: (e && e.message) || String(e)});
+  }
+
+  async function connect() {
+    var t = modal.t;
+    modal.working = true;
+    message(t.connecting);
+    refresh();
     try {
-      if (!printer.state.connected) {
-        setStatus(box, t.connecting);
-        await printer.connect();
-      }
-      setStatus(box, t.printing);
-      var canvas = render(document.createElement('canvas'), label, config.settings, printer.meta());
-      await printer.print([{canvas: canvas, quantity: 1}], config.settings.density);
-      setStatus(box, t.printed + ' · ' + describe(printer.state, t));
+      await printer.connect();
+      message('');
     } catch (e) {
-      setStatus(box, format(t.error, {message: (e && e.message) || String(e)}), true);
+      message(errorText(t, e), true);
     } finally {
-      setBusy(box, false);
+      modal.working = false;
+      refresh();
     }
   }
 
-  function init() {
-    document.querySelectorAll('.niimbot-sidebar').forEach(function (box) {
-      if (isSupported()) return;
-      var t = JSON.parse(box.getAttribute('data-config')).strings;
-      setBusy(box, true);
-      setStatus(box, t.unsupported, true);
-    });
-    printer.onChange(function (state, event) {
-      if (event !== 'disconnect' || printer.busy) return;
-      document.querySelectorAll('.niimbot-sidebar').forEach(function (box) {
-        setStatus(box, JSON.parse(box.getAttribute('data-config')).strings.disconnected);
+  async function print() {
+    var t = modal.t, n = copies();
+    $q('#niimbot-copies').value = n;
+    if (!printer.state.connected) {
+      await connect();
+      if (!printer.state.connected) return;
+    }
+    modal.working = true;
+    message(format(t.printing, {done: 0, total: n}));
+    refresh();
+    try {
+      var canvas = render(document.createElement('canvas'), modal.label, modal.config.settings, printer.meta());
+      await printer.print([{canvas: canvas, quantity: n}], modal.config.settings.density, function (done, total) {
+        message(format(t.printing, {done: done, total: total}));
       });
+      message(format(t.printed, {n: n}));
+      $q('.niimbot-close').textContent = t.close;
+    } catch (e) {
+      message(errorText(t, e), true);
+    } finally {
+      modal.working = false;
+      refresh();
+    }
+  }
+
+  function setUp(el) {
+    var config = JSON.parse(el.getAttribute('data-config'));
+    modal = {el: el, config: config, t: config.strings, label: JSON.parse(el.getAttribute('data-label')), working: false};
+    var input = $q('#niimbot-copies');
+    $q('.niimbot-minus').addEventListener('click', function () { input.value = Math.max(copies() - 1, 1); });
+    $q('.niimbot-plus').addEventListener('click', function () { input.value = Math.min(copies() + 1, 99); });
+    input.addEventListener('change', function () { input.value = copies(); });
+    $q('.niimbot-connect').addEventListener('click', connect);
+    $q('.niimbot-disconnect').addEventListener('click', function () { printer.disconnect(); });
+    $q('.niimbot-print').addEventListener('click', print);
+    // hideModal looks for the dialog among the parents of what it is given.
+    $q('.niimbot-close').addEventListener('click', function () { window.hideModal($q('.niimbot-close')); });
+    printer.onChange(function (state, event) {
+      if (event === 'disconnect' && !modal.working) message(modal.t.disconnected, true);
+      refresh();
     });
   }
 
+  function open() {
+    if (!modal) return;
+    // On a phone the link sits in the hamburger menu; close it first.
+    if (typeof window.closeFlyout === 'function') window.closeFlyout();
+    if (!modal.working) {
+      message(isSupported() ? '' : modal.t.unsupported, !isSupported());
+      $q('.niimbot-close').textContent = modal.t.cancel;
+    }
+    refresh();
+    window.showModal('niimbot-modal', '420px');
+  }
+
   document.addEventListener('click', function (e) {
-    var link = e.target.closest && e.target.closest('.niimbot-print');
+    var link = e.target.closest && e.target.closest('.niimbot-open');
     if (!link) return;
     e.preventDefault();
-    if (link.getAttribute('aria-disabled') === 'true') return;
-    printFrom(link.closest('.niimbot-sidebar'));
+    open();
   });
+
+  function init() {
+    var el = document.getElementById('niimbot-modal');
+    if (el) setUp(el);
+  }
 
   window.NiimbotLabels = {render: render, canvasSize: canvasSize, Printer: Printer, printer: printer};
 

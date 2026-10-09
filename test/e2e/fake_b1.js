@@ -126,6 +126,10 @@
           throw new DOMException('Must be handling a user gesture to show a permission request.', 'SecurityError');
         }
         state.chooserCount++;
+        if (state.cancelChooser) {
+          state.cancelChooser = false;
+          throw new DOMException('User cancelled the requestDevice() chooser.', 'NotFoundError');
+        }
         state.lastOptions = options;
         return makeDevice();
       },
