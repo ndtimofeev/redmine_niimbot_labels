@@ -7,7 +7,8 @@
 //   node plugins/redmine_niimbot_labels/test/e2e/run.js
 //
 // Uses the data seed.rb creates: project "sklad" with the module (#1-#3),
-// "office" without it (#4), admin/admin12345 and ivan/ivan12345 (Developer).
+// "office" without it (#4), admin/admin12345 and ivan/ivan12345 (Developer),
+// and the "Название для этикетки" field filled on #2 and chosen as the title.
 const {chromium, devices} = require(process.env.PLAYWRIGHT || 'playwright');
 const fs = require('fs');
 const path = require('path');
@@ -148,6 +149,16 @@ const idle = (page) => page.waitForFunction(() => !window.NiimbotLabels.printer.
   check('"Connect" alone connects without printing', (await fakeState(page)).pages.length === 2);
   await page.screenshot({path: path.join(OUT, 'phone-dialog-connected.png')});
 
+  // Label data: title from the chosen field when filled, subject otherwise;
+  // creation date in Redmine's format for the user (Russian: dd.mm.yyyy).
+  const labelData = (id) => page.goto(BASE + '/issues/' + id).then(() =>
+    page.evaluate(() => JSON.parse(document.getElementById('niimbot-modal').getAttribute('data-label'))));
+  let data = await labelData(1);
+  check('title is the subject when the field is empty', data.title === 'Осциллограф Tektronix TDS2012C, инв. 0451', data.title);
+  check('creation date in the user\'s format', /^\d\d\.\d\d\.\d{4}$/.test(data.date), data.date);
+  data = await labelData(2);
+  check('title comes from the chosen custom field when filled', data.title === 'Паяльная станция Hakko FX-888D, стол 3', data.title);
+
   await page.goto(BASE + '/issues/3');
   await page.click('.js-flyout-menu-toggle-button');
   await page.click('.flyout-menu .niimbot-open');
@@ -198,6 +209,14 @@ const idle = (page) => page.waitForFunction(() => !window.NiimbotLabels.printer.
     check('admin sees host warning when opened via another host', await ip.locator('.niimbot-warning').count() === 1, await ip.locator('.niimbot-warning').textContent().catch(() => null));
     await ipc.close();
   }
+
+  // ---- plugin settings offer string and text fields for the title
+  await dp.goto(BASE + '/settings/plugin/redmine_niimbot_labels');
+  const options = await dp.locator('#settings_title_field_id option').allTextContents();
+  check('settings: title field select lists "Issue subject" and the text field',
+        options[0] === 'Тема задачи' && options.includes('Название для этикетки'), options);
+  check('settings: the configured field is selected',
+        (await dp.locator('#settings_title_field_id option:checked').textContent()) === 'Название для этикетки');
 
   // ---- a member's access follows the role permission
   const member = await browser.newContext({locale: 'ru-RU'});

@@ -8,6 +8,9 @@
   var DOTS_PER_MM = 8;          // 203 dpi
   var DEFAULT_HEAD_DOTS = 384;  // B1 print head, 48 mm
   var DEFAULT_DIRECTION = 'top';
+  // Smallest QR module the title may squeeze the code to: 5 dots = 0.6 mm,
+  // a margin against thermal bleed.
+  var MIN_MODULE = 5;
 
   function format(template, values) {
     return String(template).replace(/%\{(\w+)\}/g, function (_, key) {
@@ -73,8 +76,45 @@
     ctx.putImageData(image, 0, 0);
   }
 
-  // QR code on the left, as large as the label height allows; issue number
-  // and (optionally) subject to the right of it.
+  var LINE_HEIGHT = 1.15;
+
+  // Largest font from maxSize down to minSize at which the text fits into
+  // maxLines (and maxHeight, if given) without cutting words; at minSize it
+  // is cut with an ellipsis.
+  function fitText(ctx, text, weight, maxWidth, maxLines, maxSize, minSize, maxHeight) {
+    var longest = String(text).split(/\s+/).reduce(function (a, b) { return b.length > a.length ? b : a; }, '');
+    for (var size = maxSize; size > minSize; size--) {
+      ctx.font = weight + size + 'px sans-serif';
+      var lines = wrap(ctx, text, maxWidth);
+      if (lines.length <= maxLines && ctx.measureText(longest).width <= maxWidth &&
+          !(maxHeight && lines.length * Math.round(size * LINE_HEIGHT) > maxHeight)) {
+        return {size: size, lines: lines};
+      }
+    }
+    ctx.font = weight + minSize + 'px sans-serif';
+    var all = wrap(ctx, text, maxWidth);
+    if (all.length > maxLines) {
+      all = all.slice(0, maxLines);
+      var last = all[maxLines - 1];
+      while (last.length > 1 && ctx.measureText(last + '…').width > maxWidth) last = last.slice(0, -1);
+      all[maxLines - 1] = last + '…';
+    }
+    return {size: minSize, lines: all};
+  }
+
+  // Layout (50 x 30 mm drawn as 384 x 240 dots):
+  //
+  //   +--------------------------------------+
+  //   | Title across the whole width, up to  |
+  //   | two lines                            |
+  //   | +--------+  #123                     |
+  //   | |   QR   |  01.10.2026               |
+  //   | +--------+                           |
+  //   +--------------------------------------+
+  //
+  // The title takes what it needs, but no more than leaves the QR code
+  // modules of MIN_MODULE dots; the QR code gets the rest of the height with
+  // a whole number of dots per module and a two-module quiet zone.
   function render(canvas, label, settings, meta) {
     var size = canvasSize(settings, meta);
     var W = canvas.width = size.width;
@@ -83,58 +123,48 @@
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#000';
+    ctx.textBaseline = 'top';
 
-    var n = label.qr.length;
     var margin = Math.round(1.5 * DOTS_PER_MM);
-    var short = Math.min(W, H);
-    // Whole dots per module, with a quiet zone of at least two modules.
-    var module = Math.max(1, Math.min(Math.floor(short / (n + 4)), Math.floor((short - 2 * margin) / n)));
+    var y = margin;
+    var n = label.qr.length;
+
+    if (label.title) {
+      var minTitle = Math.max(16, Math.round(H * 0.085));
+      var titleBudget = Math.max(H - 2 * margin - (n + 2) * MIN_MODULE, Math.round(minTitle * LINE_HEIGHT));
+      var title = fitText(ctx, label.title, 'bold ', W - 2 * margin, 2, Math.round(H * 0.13), minTitle, titleBudget);
+      var titleLine = Math.round(title.size * LINE_HEIGHT);
+      ctx.font = 'bold ' + title.size + 'px sans-serif';
+      title.lines.forEach(function (line, i) { ctx.fillText(line, margin, y + i * titleLine); });
+      y += title.lines.length * titleLine;
+    }
+
+    var areaTop = y, areaBottom = H - margin;
+    // Quiet zone of two modules above (text) and to the left (label edge,
+    // already blank paper over `margin`).
+    var module = Math.max(1, Math.min(Math.floor((areaBottom - areaTop) / (n + 2)), Math.floor((W / 2) / n)));
     var qrSize = module * n;
-    var qrY = Math.floor((H - qrSize) / 2);
-    var qrX = Math.min(qrY, Math.floor((W - qrSize) / 2));
-    label.qr.forEach(function (row, y) {
+    var qrX = Math.max(margin, 2 * module);
+    var qrY = areaBottom - qrSize;
+    label.qr.forEach(function (row, ry) {
       for (var x = 0; x < row.length; x++) {
-        if (row.charAt(x) === '1') ctx.fillRect(qrX + x * module, qrY + y * module, module, module);
+        if (row.charAt(x) === '1') ctx.fillRect(qrX + x * module, qrY + ry * module, module, module);
       }
     });
 
+    // Number and creation date to the right of the QR code, top-aligned.
     var textX = qrX + qrSize + Math.max(2 * module, margin);
     var textWidth = W - textX - margin;
     if (textWidth >= 5 * DOTS_PER_MM) {
-      ctx.textBaseline = 'top';
-      var numberText = '#' + label.id;
-      var numberSize = Math.floor(H / 4);
-      ctx.font = 'bold ' + numberSize + 'px sans-serif';
-      while (numberSize > 12 && ctx.measureText(numberText).width > textWidth) {
-        numberSize -= 2;
-        ctx.font = 'bold ' + numberSize + 'px sans-serif';
-      }
-      var y = margin;
-      ctx.fillText(numberText, textX, y);
-      y += Math.round(numberSize * 1.25);
-
-      if (settings.show_subject && label.subject) {
-        // Shrink the font until the longest word fits, so words are only
-        // cut when even the smallest size is too wide.
-        var fontSize = Math.max(16, Math.round(H / 11));
-        var longest = String(label.subject).split(/\s+/).reduce(function (a, b) { return b.length > a.length ? b : a; }, '');
-        ctx.font = fontSize + 'px sans-serif';
-        while (fontSize > 16 && ctx.measureText(longest).width > textWidth) {
-          fontSize--;
-          ctx.font = fontSize + 'px sans-serif';
-        }
-        var lineHeight = Math.round(fontSize * 1.2);
-        var maxLines = Math.floor((H - margin - y) / lineHeight);
-        var lines = wrap(ctx, label.subject, textWidth);
-        if (lines.length > maxLines && maxLines > 0) {
-          lines = lines.slice(0, maxLines);
-          var last = lines[maxLines - 1];
-          while (last.length > 1 && ctx.measureText(last + '…').width > textWidth) last = last.slice(0, -1);
-          lines[maxLines - 1] = last + '…';
-        }
-        lines.slice(0, Math.max(maxLines, 0)).forEach(function (line, i) {
-          ctx.fillText(line, textX, y + i * lineHeight);
-        });
+      var ty = qrY;
+      var number = fitText(ctx, '#' + label.id, 'bold ', textWidth, 1, Math.round(H * 0.2), 14);
+      ctx.font = 'bold ' + number.size + 'px sans-serif';
+      ctx.fillText(number.lines[0], textX, ty);
+      ty += Math.round(number.size * 1.2);
+      if (label.date) {
+        var date = fitText(ctx, label.date, '', textWidth, 1, Math.round(H * 0.1), 12);
+        ctx.font = date.size + 'px sans-serif';
+        ctx.fillText(date.lines[0], textX, ty);
       }
     }
 

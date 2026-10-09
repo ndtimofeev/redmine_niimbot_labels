@@ -1,13 +1,21 @@
 module RedmineNiimbotLabels
-  VERSION = '0.4.0'.freeze
+  # format_date: Administration > Settings > Display > Date format, or the
+  # user's language when that is "Based on user's language".
+  extend Redmine::I18n
+
+  VERSION = '0.5.0'.freeze
 
   # Matches the 50x30 mm labels sold for the B1.
   DEFAULT_SETTINGS = {
     'width_mm' => '50',
     'height_mm' => '30',
     'density' => '3',
-    'show_subject' => '1'
+    # Issue custom field (string or long text) printed instead of the subject
+    # when the issue has a non-empty value in it; blank means the subject.
+    'title_field_id' => ''
   }.freeze
+
+  TITLE_FIELD_FORMATS = %w(string text).freeze
 
   PRINTER_ICON = <<~SVG.squish.html_safe
     <svg class="s18 icon-svg" aria-hidden="true" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
@@ -27,10 +35,35 @@ module RedmineNiimbotLabels
   # Everything the browser needs to draw and print the label of one issue.
   # The QR matrix is computed here (rqrcode ships with Redmine for 2FA), so
   # the page needs no QR library and every module lands on whole printer dots.
-  def self.label(issue)
+  def self.label(issue, user = User.current)
     url = issue_url(issue)
-    {id: issue.id, subject: issue.subject, url: url, qr: qr_rows(url)}
+    {
+      id: issue.id,
+      title: title(issue, user),
+      date: format_date(user.time_to_date(issue.created_on)),
+      url: url,
+      qr: qr_rows(url)
+    }
   end
+
+  # The value of the configured custom field if the issue has it, the user
+  # may see it and it is not blank; the subject otherwise. Line breaks of a
+  # long text field are folded, the label has its own wrapping.
+  def self.title(issue, user = User.current)
+    field = title_field
+    if field
+      value = issue.visible_custom_field_values(user).find {|v| v.custom_field_id == field.id}&.value
+      value = value.to_s.squish
+      return value if value.present?
+    end
+    issue.subject
+  end
+
+  def self.title_field
+    id = settings[:title_field_id]
+    id && IssueCustomField.find_by(id: id, field_format: TITLE_FIELD_FORMATS)
+  end
+
 
   # Built from Administration > Settings > General (protocol and host name),
   # like the links in Redmine's own emails, so that a label printed from a
@@ -66,7 +99,7 @@ module RedmineNiimbotLabels
       width_mm: number(raw['width_mm'], 10..100, 50),
       height_mm: number(raw['height_mm'], 10..100, 30),
       density: number(raw['density'], 1..5, 3),
-      show_subject: raw.fetch('show_subject', '1').to_s == '1'
+      title_field_id: Integer(raw['title_field_id'].to_s, exception: false)
     }
   end
 
@@ -98,7 +131,7 @@ module RedmineNiimbotLabels
   # Settings and translations for niimbot_labels.js, as one JSON-able hash.
   def self.client_config
     {
-      settings: settings,
+      settings: settings.slice(:width_mm, :height_mm, :density),
       strings: JS_STRINGS.to_h {|key| [key, ::I18n.t("niimbot_labels_js.#{key}")]}
     }
   end

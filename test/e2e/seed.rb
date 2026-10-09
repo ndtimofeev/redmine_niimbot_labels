@@ -4,6 +4,8 @@
 #   project "sklad"  - module enabled, issues #1-#3
 #   project "office" - module disabled, issue #4
 #   user "ivan" / "ivan12345" - Developer in both projects
+#   custom field "Название для этикетки" (string, all projects), set on #2
+#   and chosen in the plugin settings as the label title
 admin = User.find_by!(login: 'admin')
 admin.password = admin.password_confirmation = 'admin12345'
 admin.must_change_passwd = false
@@ -41,4 +43,11 @@ developer = Role.givable.find_by!(position: 2)
 [sklad, office].each do |p|
   Member.create!(principal: ivan, project: p, roles: [developer]) unless Member.exists?(user_id: ivan.id, project_id: p.id)
 end
+field = IssueCustomField.find_by(name: 'Название для этикетки') ||
+  IssueCustomField.create!(name: 'Название для этикетки', field_format: 'string', is_for_all: true,
+                           visible: true, tracker_ids: Tracker.pluck(:id))
+issue = Issue.find_by!(subject: 'Паяльная станция')
+issue.custom_field_values = {field.id.to_s => 'Паяльная станция Hakko FX-888D, стол 3'}
+issue.save!
+Setting.plugin_redmine_niimbot_labels = Setting.plugin_redmine_niimbot_labels.merge('title_field_id' => field.id.to_s)
 p Issue.order(:id).pluck(:id, :project_id, :subject)

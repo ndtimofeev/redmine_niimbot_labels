@@ -1,9 +1,9 @@
 # redmine_niimbot_labels
 
 A Redmine 6+ plugin that prints issue labels on a **NIIMBOT B1** straight from
-the browser, over Web Bluetooth. The label carries a QR code with the issue
-URL (`<protocol>://<host name>/issues/<id>`), the issue number and, optionally,
-its subject. The QR codes are what
+the browser, over Web Bluetooth. The label carries the issue title, a QR
+code with the issue URL (`<protocol>://<host name>/issues/<id>`), the issue
+number and its creation date. The QR codes are what
 [organikum_qr_scanner](https://github.com/ndtimofeev/organikum_qr_scanner)
 expects to scan.
 
@@ -40,6 +40,27 @@ navigation, so on the next issue Chrome asks for the printer again.
 
 On phones (Redmine's mobile layout, below 900 px) the dialog takes the
 screen width and its buttons are at least 44 px high.
+
+## The label
+
+```
++--------------------------------------+
+| Title across the whole width, up to  |
+| two lines                            |
+| +--------+  #123                     |
+| |   QR   |  02.10.2026               |
+| +--------+                           |
++--------------------------------------+
+```
+
+- **Title**: the issue subject, or the value of the custom field chosen in
+  the plugin settings when the issue has it, the user may see it and it is
+  not empty. Bold, as large as fits into two lines; longer titles get an
+  ellipsis.
+- **QR code** under the title, as large as the remaining height allows.
+- **Issue number** and **creation date** to the right of the QR code. The
+  date uses Redmine's date format (*Administration > Settings > Display*), or
+  the user's language when that is "Based on user's language".
 
 ## Where it shows up
 
@@ -86,9 +107,13 @@ up"); rolling it back (`NAME=redmine_niimbot_labels VERSION=0`) removes the
 permission from all roles. No gems: the QR matrix comes from `rqrcode`, which
 Redmine already bundles for two-factor authentication.
 
-Settings (*Administration > Plugins > Niimbot Labels > Configure*): label
-width and height in mm (default 50 x 30), print density 1-5 (default 3),
-whether to print the subject.
+Settings (*Administration > Plugins > Niimbot Labels > Configure*):
+
+- label width and height in mm (default 50 x 30);
+- print density 1-5 (default 3);
+- **Title on the label**: "Issue subject" or an issue custom field of the
+  *Text* or *Long text* format, printed instead of the subject when filled in
+  (line breaks of a long text are folded into spaces).
 
 ## Design
 
@@ -100,6 +125,12 @@ whether to print the subject.
   non-white pixel.
 - **Size.** The side across the print head is cut to its width (384 dots,
   48 mm on the B1): a 50 x 30 mm label is drawn as 384 x 240 dots.
+- **Layout.** The title takes what it needs at the top, but never squeezes
+  the QR code below 5 dots (0.6 mm) per module, a margin against thermal
+  bleed; the QR code gets the rest of the height with a whole number of dots
+  per module and a quiet zone of at least two modules; number and date are fitted into the space to its
+  right. Title text, date and the QR matrix are prepared on the server
+  (`RedmineNiimbotLabels.label`), the drawing is done in the browser.
 - **One print job per press**, all copies in it, the way NiimBlue does it:
   heartbeat polling is paused meanwhile and `printEnd` always runs.
 - **The link** is rendered by the `view_issues_sidebar_issues_bottom` hook,
@@ -130,7 +161,7 @@ this yet.
 ## Tests
 
 `test/e2e/seed.rb` creates the test data (a project with the module, one
-without, a Developer member); `test/e2e/run.js` (Playwright) drives a running
+without, a Developer member, a title custom field filled on one issue); `test/e2e/run.js` (Playwright) drives a running
 Redmine, in a Pixel 7 profile (link in the hamburger menu, dialog) and on desktop,
 with `test/e2e/fake_b1.js` replacing `navigator.bluetooth` by a simulated B1
 (answers taken from a real B1 dump in niimbluelib's tests). It rebuilds the
