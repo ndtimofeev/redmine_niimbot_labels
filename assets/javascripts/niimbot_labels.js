@@ -144,10 +144,9 @@
 
   // ---------------------------------------------------------------- printer
 
-  // One Bluetooth connection to the printer. The connection lives as long as
-  // the page: Redmine reloads the page on every click, so on the issue page
-  // the printer has to be picked again after each navigation, while the
-  // print page keeps it for a whole session.
+  // One Bluetooth connection to the printer. It lives as long as the page:
+  // Redmine reloads the page on every click, so after moving to another issue
+  // the printer has to be picked again.
   function Printer() {
     this.client = null;
     this.state = {connected: false, name: '', battery: null, lidClosed: null, paper: null};
@@ -252,7 +251,6 @@
   };
 
   function describe(state, t) {
-    if (!state.connected) return t.not_connected;
     var parts = [format(t.connected, {name: state.name || 'NIIMBOT'})];
     if (state.battery !== null) parts.push(format(t.battery, {n: state.battery}));
     if (state.lidClosed === false) parts.push(t.lid_open);
@@ -260,262 +258,72 @@
     return parts.join(' · ');
   }
 
-  function errorText(t, e) {
-    return format(t.error, {message: (e && e.message) || String(e)});
+  // ---------------------------------------------------------------- sidebar
+
+  // "Print label" in the issue sidebar. The first press on a freshly loaded
+  // page opens Chrome's device chooser; later presses reuse the connection.
+  // The click is delegated because on a phone Redmine moves the sidebar into
+  // the hamburger menu.
+  var printer = new Printer();
+
+  function setStatus(box, text, isError) {
+    var status = box.querySelector('.niimbot-status');
+    status.textContent = text || '';
+    status.classList.toggle('niimbot-error', !!isError);
   }
 
-  // Keeps the screen on while a printer is connected: Android freezes a page
-  // with the screen off, and the Bluetooth connection goes with it.
-  function keepScreenOn(printer) {
-    var lock = null;
-    async function update() {
-      try {
-        if (printer.state.connected && document.visibilityState === 'visible' && !lock && navigator.wakeLock) {
-          lock = await navigator.wakeLock.request('screen');
-          lock.addEventListener('release', function () { lock = null; });
-        } else if (!printer.state.connected && lock) {
-          await lock.release();
-          lock = null;
-        }
-      } catch (e) {
-        lock = null;
-      }
-    }
-    printer.onChange(update);
-    document.addEventListener('visibilitychange', update);
+  function setBusy(box, busy) {
+    var link = box.querySelector('.niimbot-print');
+    if (busy) link.setAttribute('aria-disabled', 'true');
+    else link.removeAttribute('aria-disabled');
   }
 
-  // ------------------------------------------------------------ issue page
-
-  // A button under the issue attributes. The first press on a freshly loaded
-  // page opens the device chooser; later presses on the same page reuse the
-  // connection.
-  function initIssueWidget(root) {
-    var config = JSON.parse(root.getAttribute('data-config'));
-    var label = JSON.parse(root.getAttribute('data-label'));
+  async function printFrom(box) {
+    var config = JSON.parse(box.getAttribute('data-config'));
+    var label = JSON.parse(box.getAttribute('data-label'));
     var t = config.strings;
-    var canvas = root.querySelector('canvas');
-    var button = root.querySelector('.niimbot-print');
-    var status = root.querySelector('.niimbot-status');
-    var printer = new Printer();
-
-    render(canvas, label, config.settings, null);
-    if (!isSupported()) {
-      button.disabled = true;
-      status.textContent = t.unsupported;
-      return;
-    }
-    printer.onChange(function (state, event) {
-      if (event === 'disconnect' && !button.disabled) status.textContent = t.disconnected;
-    });
-
-    button.addEventListener('click', async function () {
-      button.disabled = true;
-      try {
-        if (!printer.state.connected) {
-          status.textContent = t.connecting;
-          await printer.connect();
-          render(canvas, label, config.settings, printer.meta());
-        }
-        status.textContent = format(t.printing, {done: 0, total: 1});
-        await printer.print([{canvas: canvas, quantity: 1}], config.settings.density);
-        status.textContent = t.printed + ' · ' + describe(printer.state, t);
-      } catch (e) {
-        status.textContent = errorText(t, e);
-      } finally {
-        button.disabled = false;
-      }
-    });
-  }
-
-  // ------------------------------------------------------------ print page
-
-  function initPrintPage(root) {
-    var config = JSON.parse(root.getAttribute('data-config'));
-    var t = config.strings;
-    var labelUrl = root.getAttribute('data-label-url');
-    var printer = new Printer();
-    var queue = [];
-
-    var statusEl = root.querySelector('.niimbot-printer-status');
-    var messageEl = root.querySelector('.niimbot-message');
-    var connectBtn = root.querySelector('.niimbot-connect');
-    var disconnectBtn = root.querySelector('.niimbot-disconnect');
-    var printAllBtn = root.querySelector('.niimbot-print-all');
-    var list = root.querySelector('.niimbot-queue');
-    var emptyEl = root.querySelector('.niimbot-empty');
-    var form = root.querySelector('.niimbot-add');
-    var input = form.querySelector('input');
-
-    function message(text, isError) {
-      messageEl.textContent = text || '';
-      messageEl.className = 'niimbot-message' + (isError ? ' niimbot-error' : '');
-    }
-
-    function syncUrl() {
-      var url = new URL(window.location.href);
-      if (queue.length) url.searchParams.set('ids', queue.map(function (item) { return item.label.id; }).join(','));
-      else url.searchParams.delete('ids');
-      window.history.replaceState(null, '', url.toString());
-    }
-
-    function refresh() {
-      var connected = printer.state.connected;
-      statusEl.textContent = describe(printer.state, t);
-      connectBtn.hidden = connected;
-      disconnectBtn.hidden = !connected;
-      printAllBtn.disabled = !connected || printer.busy || !queue.length;
-      emptyEl.hidden = queue.length > 0;
-      queue.forEach(function (item) {
-        item.printBtn.disabled = !connected || printer.busy;
-      });
-    }
-
-    function rerender() {
-      var meta = printer.meta();
-      queue.forEach(function (item) { render(item.canvas, item.label, config.settings, meta); });
-    }
-
-    function addLabel(label) {
-      if (queue.some(function (item) { return item.label.id === label.id; })) return;
-      var li = document.createElement('li');
-      li.className = 'niimbot-item';
-      var canvas = document.createElement('canvas');
-      canvas.className = 'niimbot-preview';
-      var info = document.createElement('div');
-      info.className = 'niimbot-item-info';
-      var title = document.createElement('a');
-      title.href = label.url;
-      title.textContent = '#' + label.id + ' ' + label.subject;
-      var done = document.createElement('span');
-      done.className = 'niimbot-done';
-      var controls = document.createElement('div');
-      controls.className = 'niimbot-item-controls';
-      var qtyLabel = document.createElement('label');
-      qtyLabel.textContent = t.quantity + ' ';
-      var qty = document.createElement('input');
-      qty.type = 'number';
-      qty.min = '1';
-      qty.max = '99';
-      qty.value = '1';
-      qty.inputMode = 'numeric';
-      qtyLabel.appendChild(qty);
-      var printBtn = document.createElement('button');
-      printBtn.type = 'button';
-      printBtn.textContent = t.print;
-      var removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.className = 'niimbot-remove';
-      removeBtn.textContent = t.remove;
-      controls.append(qtyLabel, printBtn, removeBtn);
-      info.append(title, done, controls);
-      li.append(canvas, info);
-      list.appendChild(li);
-
-      var item = {label: label, canvas: canvas, li: li, qty: qty, printBtn: printBtn, done: done, printed: 0};
-      render(canvas, label, config.settings, printer.meta());
-      printBtn.addEventListener('click', function () { printItems([item]); });
-      removeBtn.addEventListener('click', function () {
-        queue = queue.filter(function (other) { return other !== item; });
-        li.remove();
-        syncUrl();
-        refresh();
-      });
-      queue.push(item);
-    }
-
-    function quantity(item) {
-      var n = parseInt(item.qty.value, 10);
-      return n >= 1 && n <= 99 ? n : 1;
-    }
-
-    async function printItems(items) {
-      if (!items.length || printer.busy) return;
-      var pages = items.map(function (item) { return {canvas: item.canvas, quantity: quantity(item)}; });
-      var total = pages.reduce(function (sum, page) { return sum + page.quantity; }, 0);
-      message(format(t.printing, {done: 0, total: total}));
-      var job = printer.print(pages, config.settings.density, function (done, all) {
-        message(format(t.printing, {done: done, total: all}));
-      });
-      refresh();
-      try {
-        await job;
-        items.forEach(function (item, i) {
-          item.printed += pages[i].quantity;
-          item.done.textContent = format(t.printed_times, {n: item.printed});
-        });
-        message(t.printed);
-      } catch (e) {
-        message(errorText(t, e), true);
-      } finally {
-        refresh();
-      }
-    }
-
-    async function addIssues(text) {
-      var urlMatch = text.match(/\/issues\/(\d+)/);
-      var ids = urlMatch ? [urlMatch[1]] : (text.match(/\d+/g) || []);
-      for (var i = 0; i < ids.length; i++) {
-        try {
-          var response = await fetch(labelUrl.replace('ID', ids[i]), {
-            headers: {Accept: 'application/json'},
-            credentials: 'same-origin'
-          });
-          var data = await response.json();
-          if (!response.ok) throw new Error(data.error || response.statusText);
-          addLabel(data);
-          message('');
-        } catch (e) {
-          message(errorText(t, e), true);
-        }
-      }
-      syncUrl();
-      refresh();
-    }
-
-    config.labels.forEach(addLabel);
-    printer.onChange(function (state, event) {
-      if (event === 'connect') rerender();
-      if (event === 'disconnect') message(t.disconnected, true);
-      refresh();
-    });
-    keepScreenOn(printer);
-
-    form.addEventListener('submit', function (e) {
-      e.preventDefault();
-      var text = input.value.trim();
-      input.value = '';
-      if (text) addIssues(text);
-    });
-    printAllBtn.addEventListener('click', function () { printItems(queue.slice()); });
-    disconnectBtn.addEventListener('click', function () { printer.disconnect(); });
-    connectBtn.addEventListener('click', async function () {
-      connectBtn.disabled = true;
-      message(t.connecting);
-      try {
+    if (printer.busy) return;
+    setBusy(box, true);
+    try {
+      if (!printer.state.connected) {
+        setStatus(box, t.connecting);
         await printer.connect();
-        message('');
-      } catch (e) {
-        message(errorText(t, e), true);
-      } finally {
-        connectBtn.disabled = false;
-        refresh();
       }
-    });
-
-    if (!isSupported()) {
-      connectBtn.disabled = true;
-      message(t.unsupported, true);
+      setStatus(box, t.printing);
+      var canvas = render(document.createElement('canvas'), label, config.settings, printer.meta());
+      await printer.print([{canvas: canvas, quantity: 1}], config.settings.density);
+      setStatus(box, t.printed + ' · ' + describe(printer.state, t));
+    } catch (e) {
+      setStatus(box, format(t.error, {message: (e && e.message) || String(e)}), true);
+    } finally {
+      setBusy(box, false);
     }
-    refresh();
   }
-
-  window.NiimbotLabels = {render: render, canvasSize: canvasSize, Printer: Printer};
 
   function init() {
-    document.querySelectorAll('[data-niimbot-issue]').forEach(initIssueWidget);
-    document.querySelectorAll('[data-niimbot-print-page]').forEach(initPrintPage);
+    document.querySelectorAll('.niimbot-sidebar').forEach(function (box) {
+      if (isSupported()) return;
+      var t = JSON.parse(box.getAttribute('data-config')).strings;
+      setBusy(box, true);
+      setStatus(box, t.unsupported, true);
+    });
+    printer.onChange(function (state, event) {
+      if (event !== 'disconnect' || printer.busy) return;
+      document.querySelectorAll('.niimbot-sidebar').forEach(function (box) {
+        setStatus(box, JSON.parse(box.getAttribute('data-config')).strings.disconnected);
+      });
+    });
   }
+
+  document.addEventListener('click', function (e) {
+    var link = e.target.closest && e.target.closest('.niimbot-print');
+    if (!link) return;
+    e.preventDefault();
+    if (link.getAttribute('aria-disabled') === 'true') return;
+    printFrom(link.closest('.niimbot-sidebar'));
+  });
+
+  window.NiimbotLabels = {render: render, canvasSize: canvasSize, Printer: Printer, printer: printer};
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

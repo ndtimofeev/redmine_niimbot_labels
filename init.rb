@@ -16,10 +16,6 @@ Redmine::Plugin.register :redmine_niimbot_labels do
   # the permission below (see db/migrate for who gets it on install).
   project_module :niimbot_labels do
     # read: printing changes nothing, so it also works in closed projects.
-    permission :print_issue_labels, {niimbot_labels: [:index, :show]}, read: true
+    permission :print_issue_labels, {}, read: true
   end
-
-  menu :project_menu, :niimbot_labels,
-       {controller: 'niimbot_labels', action: 'index'},
-       param: :project_id, caption: :label_niimbot_labels, after: :issues
 end

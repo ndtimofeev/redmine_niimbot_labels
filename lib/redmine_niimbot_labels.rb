@@ -1,5 +1,5 @@
 module RedmineNiimbotLabels
-  VERSION = '0.2.0'.freeze
+  VERSION = '0.3.0'.freeze
 
   # Matches the 50x30 mm labels sold for the B1.
   DEFAULT_SETTINGS = {
@@ -8,6 +8,14 @@ module RedmineNiimbotLabels
     'density' => '3',
     'show_subject' => '1'
   }.freeze
+
+  PRINTER_ICON = <<~SVG.squish.html_safe
+    <svg class="s18 icon-svg" aria-hidden="true" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17 17h2a2 2 0 0 0 2 -2v-4a2 2 0 0 0 -2 -2h-14a2 2 0 0 0 -2 2v4a2 2 0 0 0 2 2h2"/>
+      <path d="M17 9v-4a2 2 0 0 0 -2 -2h-6a2 2 0 0 0 -2 2v4"/>
+      <path d="M7 15a2 2 0 0 1 2 -2h6a2 2 0 0 1 2 2v4a2 2 0 0 1 -2 2h-6a2 2 0 0 1 -2 -2z"/>
+    </svg>
+  SVG
 
   # Whether the current user may print the label of this issue: the issue's
   # project has the module enabled and one of the user's roles there has
@@ -83,9 +91,7 @@ module RedmineNiimbotLabels
   end
 
   JS_STRINGS = %w(
-    print print_all connect disconnect not_connected connecting connected battery
-    lid_open no_paper printing printed error unsupported disconnected empty
-    add remove quantity printed_times
+    connecting printing printed error unsupported disconnected connected battery lid_open no_paper
   ).freeze
 
   # Settings and translations for niimbot_labels.js, as one JSON-able hash.

@@ -1,0 +1,32 @@
+<% issue = @issue %>
+<% if issue.is_a?(Issue) && issue.persisted? && controller.action_name == 'show' &&
+      RedmineNiimbotLabels.printable?(issue) %>
+  <% content_for :header_tags do %>
+    <%= javascript_include_tag niimbot_labels_script_path(v: RedmineNiimbotLabels.javascript_digest), defer: true %>
+    <style>
+      .niimbot-sidebar .niimbot-status { color: #555; margin-top: 4px; }
+      .niimbot-sidebar .niimbot-error, .niimbot-sidebar .niimbot-warning { color: #c22; }
+      .niimbot-sidebar .niimbot-print[aria-disabled="true"] { color: #999; pointer-events: none; }
+      /* On a phone the sidebar sits in the dark hamburger menu. */
+      .flyout-menu .niimbot-sidebar p { padding-inline: 8px; color: inherit; opacity: .85; }
+      .flyout-menu .niimbot-sidebar .niimbot-error,
+      .flyout-menu .niimbot-sidebar .niimbot-warning { color: #ffa8a8; opacity: 1; }
+    </style>
+  <% end %>
+  <%= tag.div class: 'niimbot-sidebar', data: {
+        config: RedmineNiimbotLabels.client_config.to_json,
+        label: RedmineNiimbotLabels.label(issue).to_json
+      } do %>
+    <h3><%= l(:label_niimbot_labels_sidebar) %></h3>
+    <ul>
+      <%# Redmine's icon sprite has no printer, so the icon (Tabler "printer",
+          the set Redmine's own icons come from) is inlined. %>
+      <li><%= link_to RedmineNiimbotLabels::PRINTER_ICON + tag.span(l(:button_niimbot_labels_print), class: 'icon-label'),
+                      '#', class: 'niimbot-print icon', role: 'button' %></li>
+    </ul>
+    <p class="niimbot-status" aria-live="polite"></p>
+    <% if User.current.admin? && (host = RedmineNiimbotLabels.host_mismatch(request)) %>
+      <p class="niimbot-warning"><%= l(:warning_niimbot_labels_host_mismatch, host: host) %></p>
+    <% end %>
+  <% end %>
+<% end %>

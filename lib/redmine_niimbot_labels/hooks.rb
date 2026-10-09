@@ -1,9 +1,9 @@
 module RedmineNiimbotLabels
   class Hooks < Redmine::Hook::ViewListener
-    # Print button with a preview, under the issue attributes.
-    render_on :view_issues_show_details_bottom, partial: 'niimbot_labels/issue_button'
-
-    # "Print labels" for the issues selected in a list.
-    render_on :view_issues_context_menu_end, partial: 'niimbot_labels/context_menu'
+    # "Print label" in the issue sidebar, under the "Issues" block. On a phone
+    # Redmine moves the sidebar into the menu behind the hamburger button.
+    # The same sidebar is shown on issue lists too; the partial only renders
+    # on the page of a saved issue.
+    render_on :view_issues_sidebar_issues_bottom, partial: 'niimbot_labels/sidebar'
   end
 end

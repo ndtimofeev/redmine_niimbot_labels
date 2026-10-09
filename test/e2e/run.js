@@ -26,19 +26,8 @@ function check(name, ok, extra) {
   if (!ok) failures++;
 }
 
-const WAKE = `(() => {
-  window.__wake = {requests: 0};
-  if (!navigator.wakeLock) Object.defineProperty(navigator, 'wakeLock', {value: {}});
-  navigator.wakeLock.request = async () => {
-    window.__wake.requests++;
-    const sentinel = new EventTarget();
-    sentinel.release = async () => { window.__wake.released = true; };
-    return sentinel;
-  };
-})();`;
-
-async function login(page, user = 'admin', password = 'admin12345') {
-  await page.goto(BASE + '/login');
+async function login(page, user = 'admin', password = 'admin12345', base = BASE) {
+  await page.goto(base + '/login');
   await page.fill('#username', user);
   await page.fill('#password', password);
   await page.click('#login-submit');
@@ -62,181 +51,113 @@ async function decodePrinted(page, index) {
     if (!div) { div = document.createElement('div'); div.id = 'qr-test'; div.style.display = 'none'; document.body.appendChild(div); }
     const blob = await new Promise((r) => c.toBlob(r));
     const text = await new Html5Qrcode('qr-test').scanFile(new File([blob], 'l.png', {type: 'image/png'}), false);
-    return {text, rows: p.rows, cols: p.cols, copies: p.copies, png: c.toDataURL()};
+    return {text, rows: p.rows, cols: p.cols, png: c.toDataURL()};
   }, [index, SCANNER]);
-}
-
-// Whether the bitmap the printer got equals the preview canvas pixel for pixel.
-async function samePixels(page, canvasSelector, index) {
-  return page.evaluate(([sel, index]) => {
-    const p = window.__fakeB1.pages[index];
-    const c = document.querySelector(sel);
-    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-    if (c.width !== p.cols || c.height !== p.rows) return false;
-    for (let i = 0; i < p.bits.length; i++) if ((d[i * 4] === 0 ? 1 : 0) !== p.bits[i]) return false;
-    return true;
-  }, [canvasSelector, index]);
 }
 
 function savePng(dataUrl, name) {
   fs.writeFileSync(path.join(OUT, name), Buffer.from(dataUrl.split(',')[1], 'base64'));
 }
 
+const fakeState = (page) => page.evaluate(() => ({chooser: window.__fakeB1.chooserCount, pages: window.__fakeB1.pages.length, density: window.__fakeB1.density}));
+const statusText = (page) => page.textContent('.niimbot-sidebar .niimbot-status');
+const waitStatus = (page, re) => page.waitForFunction(
+  (src) => new RegExp(src).test(document.querySelector('.niimbot-sidebar .niimbot-status').textContent),
+  re.source, {timeout: 15000});
+
 (async () => {
   const browser = await chromium.launch();
-  const context = await browser.newContext({...devices['Pixel 7'], locale: 'ru-RU'});
-  await context.addInitScript(FAKE);
-  await context.addInitScript(WAKE);
-  const page = await context.newPage();
   const errors = [];
+
+  // ---- phone: the sidebar lives behind the hamburger button
+  const phone = await browser.newContext({...devices['Pixel 7'], locale: 'ru-RU'});
+  await phone.addInitScript(FAKE);
+  const page = await phone.newPage();
   page.on('pageerror', (e) => errors.push(e.message));
   await login(page);
 
-  // ---- issue page: chooser on each page load
   await page.goto(BASE + '/issues/1');
-  await page.waitForSelector('.niimbot-issue canvas');
-  const size = await page.evaluate(() => { const c = document.querySelector('.niimbot-issue canvas'); return [c.width, c.height]; });
-  check('issue preview is 384x240 dots (50x30 mm on a 48 mm head)', size[0] === 384 && size[1] === 240, size);
-  await page.click('.niimbot-print');
-  await page.waitForFunction(() => /Напечатано/.test(document.querySelector('.niimbot-status').textContent), null, {timeout: 15000});
-  let fake = await page.evaluate(() => ({chooser: window.__fakeB1.chooserCount, pages: window.__fakeB1.pages.length, density: window.__fakeB1.density, filters: window.__fakeB1.lastOptions.filters.length}));
-  check('first print opens the chooser once and prints one page', fake.chooser === 1 && fake.pages === 1, fake);
+  check('no label widget in the issue body any more', await page.locator('#content .niimbot-issue, #content canvas').count() === 0);
+  await page.click('.js-flyout-menu-toggle-button');
+  await page.waitForSelector('.flyout-menu .niimbot-sidebar .niimbot-print', {state: 'visible'});
+  check('on a phone the button is in the hamburger menu', true);
+  await page.screenshot({path: path.join(OUT, 'phone-menu.png')});
+  await page.click('.flyout-menu .niimbot-print');
+  await waitStatus(page, /Напечатано/);
+  let fake = await fakeState(page);
+  check('first press opens the chooser once and prints one label', fake.chooser === 1 && fake.pages === 1, fake);
   check('density from settings (3) is sent', fake.density === 3, fake.density);
-  check('printed bitmap equals the preview', await samePixels(page, '.niimbot-issue canvas', 0));
-  let decoded = await decodePrinted(page, 0);
+  const decoded = await decodePrinted(page, 0);
   savePng(decoded.png, 'printed-issue-1.png');
+  check('printed label is 384x240 dots (50x30 mm on a 48 mm head)', decoded.cols === 384 && decoded.rows === 240, [decoded.cols, decoded.rows]);
   check('QR on the printed label decodes to the issue URL', decoded.text === BASE + '/issues/1', decoded.text);
-  check('status shows printer and battery', await page.textContent('.niimbot-status'), await page.textContent('.niimbot-status'));
-  await page.click('.niimbot-print');
-  await page.waitForFunction(() => window.__fakeB1.pages.length === 2, null, {timeout: 15000});
-  fake = await page.evaluate(() => window.__fakeB1.chooserCount);
-  check('second print on the same page reuses the connection', fake === 1, fake);
-  await page.screenshot({path: path.join(OUT, 'issue-page.png'), fullPage: true});
+  check('status shows printer and battery', /B1-.*заряд 100%/.test(await statusText(page)), await statusText(page));
+  await page.screenshot({path: path.join(OUT, 'phone-printed.png')});
 
-  await page.reload();
-  await page.waitForSelector('.niimbot-issue canvas');
-  await page.click('.niimbot-print');
-  await page.waitForFunction(() => window.__fakeB1.pages.length === 1, null, {timeout: 15000});
-  fake = await page.evaluate(() => window.__fakeB1.chooserCount);
-  check('after reload the chooser is shown again (new page, new connection)', fake === 1, 'fresh page state');
-
-  // ---- context menu on the issue list
-  const desktop = await browser.newContext({locale: 'ru-RU', viewport: {width: 1280, height: 900}});
-  const dp = await desktop.newPage();
-  await login(dp);
-  await dp.goto(BASE + '/projects/sklad/issues');
-  await dp.check('tr#issue-1 input[type=checkbox]');
-  await dp.check('tr#issue-3 input[type=checkbox]');
-  await dp.click('tr#issue-3 td.status', {button: 'right'});
-  await dp.waitForSelector('#context-menu a[href*="niimbot_labels"]');
-  const href = await dp.getAttribute('#context-menu a[href*="niimbot_labels"]', 'href');
-  check('context menu links to the project print page with the selected issues',
-        /^\/projects\/sklad\/niimbot_labels\?ids=(3%2C1|1%2C3)$/.test(href), href);
-  await dp.screenshot({path: path.join(OUT, 'context-menu.png')});
-
-  // ---- print page
-  await page.goto(BASE + '/projects/sklad/niimbot_labels?ids=1,3');
-  await page.waitForSelector('.niimbot-item');
-  check('print page lists the two issues', (await page.$$('.niimbot-item')).length === 2);
-  check('print buttons disabled before connecting', await page.isDisabled('.niimbot-print-all'));
-  await page.fill('.niimbot-add input', '2');
-  await page.press('.niimbot-add input', 'Enter');
-  await page.waitForFunction(() => document.querySelectorAll('.niimbot-item').length === 3);
-  check('issue added by number, URL updated', /ids=1%2C3%2C2|ids=1,3,2/.test(page.url()), page.url());
-  await page.fill('.niimbot-add input', BASE + '/issues/2');
-  await page.press('.niimbot-add input', 'Enter');
-  await page.waitForTimeout(500);
-  check('pasting an issue URL of an issue already queued adds no duplicate', (await page.$$('.niimbot-item')).length === 3);
-  await page.fill('.niimbot-add input', '999');
-  await page.press('.niimbot-add input', 'Enter');
-  await page.waitForFunction(() => document.querySelector('.niimbot-message').classList.contains('niimbot-error'));
-  check('unknown issue reported', true, await page.textContent('.niimbot-message'));
-
-  await page.click('.niimbot-connect');
-  await page.waitForFunction(() => /Подключён/.test(document.querySelector('.niimbot-printer-status').textContent));
-  check('connected status', true, await page.textContent('.niimbot-printer-status'));
-  check('screen wake lock requested while connected', await page.evaluate(() => window.__wake.requests) >= 1);
-  await page.fill('.niimbot-item:nth-child(2) .niimbot-item-controls input', '2');
-  await page.click('.niimbot-print-all');
-  await page.waitForFunction(() => /Напечатано/.test(document.querySelector('.niimbot-message').textContent), null, {timeout: 20000});
-  fake = await page.evaluate(() => ({chooser: window.__fakeB1.chooserCount, pages: window.__fakeB1.pages.map((p) => p.copies), total: window.__fakeB1.totalPages}));
-  check('print all: one job, 3 labels, 4 copies, one chooser', fake.chooser === 1 && fake.pages.join() === '1,2,1' && fake.total === 4, fake);
-  for (let i = 0; i < 3; i++) {
-    const r = await decodePrinted(page, i);
-    savePng(r.png, `printed-queue-${i}.png`);
-    check(`queue label ${i + 1} decodes`, [1, 2, 3].some((id) => r.text === BASE + '/issues/' + id), r.text);
-  }
-  await page.click('.niimbot-item:nth-child(1) .niimbot-item-controls button');
-  await page.waitForFunction(() => window.__fakeB1.pages.length === 4, null, {timeout: 15000});
-  check('single item print reuses connection', await page.evaluate(() => window.__fakeB1.chooserCount) === 1);
-  check('printed counter shown', true, await page.textContent('.niimbot-item:nth-child(1) .niimbot-done'));
-  await page.screenshot({path: path.join(OUT, 'print-page.png'), fullPage: true});
+  await page.click('.flyout-menu .niimbot-print');
+  await page.waitForFunction(() => window.__fakeB1.pages.length === 2 && !window.NiimbotLabels.printer.busy, null, {timeout: 15000});
+  check('second press on the same page reuses the connection', (await fakeState(page)).chooser === 1);
 
   await page.evaluate(() => window.__fakeB1.dropConnection());
-  await page.waitForFunction(() => /отключился/.test(document.querySelector('.niimbot-message').textContent));
-  check('dropped connection reported, print disabled', await page.isDisabled('.niimbot-print-all'));
-  check('connect button is back', await page.isVisible('.niimbot-connect'));
+  await waitStatus(page, /отключился/);
+  check('dropped connection is reported', true, await statusText(page));
+  await page.click('.flyout-menu .niimbot-print');
+  await waitStatus(page, /Напечатано/);
+  fake = await fakeState(page);
+  check('after a drop the next press asks for the printer again', fake.chooser === 2 && fake.pages === 3, fake);
 
-  // ---- browser without Web Bluetooth
-  const plain = await browser.newContext({...devices['Pixel 7'], locale: 'ru-RU'});
-  await plain.addInitScript(() => Object.defineProperty(navigator, 'bluetooth', {value: undefined}));
-  const p2 = await plain.newPage();
-  await login(p2);
-  await p2.goto(BASE + '/issues/1');
-  await p2.waitForSelector('.niimbot-issue canvas');
-  check('without Web Bluetooth the button is disabled with an explanation', await p2.isDisabled('.niimbot-print'), await p2.textContent('.niimbot-status'));
+  await page.goto(BASE + '/issues/3');
+  await page.click('.js-flyout-menu-toggle-button');
+  await page.click('.flyout-menu .niimbot-print');
+  await waitStatus(page, /Напечатано/);
+  fake = await fakeState(page);
+  check('another issue: new page, chooser again', fake.chooser === 1 && fake.pages === 1, fake);
+  const third = await decodePrinted(page, 0);
+  savePng(third.png, 'printed-issue-3.png');
+  check('...and its own URL in the QR', third.text === BASE + '/issues/3', third.text);
 
-  // ---- server side
-  const anon = await browser.newContext();
-  const a = await anon.newPage();
-  let resp;
-  resp = await a.goto(BASE + '/niimbot_labels/script?v=1');
-  check('script is served to anyone, cacheable', resp.status() === 200 && /max-age=\d{8}, public/.test(resp.headers()['cache-control']), resp.headers()['cache-control']);
-  resp = await a.goto(BASE + '/niimbot_labels/issues/1');
-  check('label JSON requires login', resp.status() === 401 || /login/.test(a.url()), [resp.status(), a.url()]);
-  resp = await page.goto(BASE + '/niimbot_labels/issues/999');
-  check('missing issue answers 404 JSON', resp.status() === 404, await resp.text());
-
-  // ---- module and permission scoping
+  // ---- desktop: the regular sidebar
+  const desktop = await browser.newContext({locale: 'ru-RU', viewport: {width: 1280, height: 900}});
+  const dp = await desktop.newPage();
+  dp.on('pageerror', (e) => errors.push(e.message));
+  await login(dp);
+  await dp.goto(BASE + '/issues/1');
+  check('desktop: button in the sidebar', await dp.locator('#sidebar .niimbot-sidebar .niimbot-print').isVisible());
+  await dp.screenshot({path: path.join(OUT, 'desktop-issue.png')});
+  check('no host warning when host name matches', await dp.locator('.niimbot-warning').count() === 0);
+  await dp.goto(BASE + '/projects/sklad/issues');
+  check('not on issue lists (same sidebar)', await dp.locator('.niimbot-sidebar').count() === 0);
+  await dp.goto(BASE + '/projects/sklad/issues/new');
+  check('not on the new issue form', await dp.locator('.niimbot-sidebar').count() === 0);
   await dp.goto(BASE + '/projects/sklad');
-  check('project menu has "label printing" where the module is on', await dp.locator('#main-menu a.niimbot-labels').count() === 1);
-  await dp.goto(BASE + '/projects/office');
-  check('...and not where it is off', await dp.locator('#main-menu a.niimbot-labels').count() === 0);
-  resp = await dp.goto(BASE + '/projects/office/niimbot_labels');
-  check('print page of a project without the module answers 403', resp.status() === 403, resp.status());
-  await dp.goto(BASE + '/issues/4');
-  check('no print button on an issue of a project without the module', await dp.locator('.niimbot-issue').count() === 0);
-  resp = await dp.goto(BASE + '/niimbot_labels/issues/4');
-  check('label JSON of such an issue answers 403', resp.status() === 403, await resp.text());
-  await dp.goto(BASE + '/projects/sklad/niimbot_labels?ids=1,4');
-  await dp.waitForSelector('.niimbot-item');
-  check('print page drops issues of projects without the module and says so',
-        (await dp.$$('.niimbot-item')).length === 1 && /#4/.test(await dp.textContent('p.warning')), await dp.textContent('p.warning'));
-  await dp.fill('.niimbot-add input', '4');
-  await dp.press('.niimbot-add input', 'Enter');
-  await dp.waitForFunction(() => document.querySelector('.niimbot-message').classList.contains('niimbot-error'));
-  check('adding such an issue by number is refused', (await dp.$$('.niimbot-item')).length === 1, await dp.textContent('.niimbot-message'));
-  await dp.goto(BASE + '/issues?set_filter=1&sort=id');
-  await dp.check('tr#issue-4 input[type=checkbox]');
-  await dp.click('tr#issue-4 td.status', {button: 'right'});
-  await dp.waitForSelector('#context-menu ul');
-  check('no context menu item when only issues without the module are selected',
-        await dp.locator('#context-menu a[href*="niimbot_labels"]').count() === 0);
-  await dp.keyboard.press('Escape');
-  await dp.goto(BASE + '/issues?set_filter=1&sort=id');
+  check('no project menu tab any more', await dp.locator('#main-menu a.niimbot-labels').count() === 0);
+  let resp = await dp.goto(BASE + '/projects/sklad/niimbot_labels');
+  check('old print page is gone', resp.status() === 404, resp.status());
+  await dp.goto(BASE + '/projects/sklad/issues');
   await dp.check('tr#issue-1 input[type=checkbox]');
-  await dp.check('tr#issue-4 input[type=checkbox]');
   await dp.click('tr#issue-1 td.status', {button: 'right'});
-  await dp.waitForSelector('#context-menu a[href*="niimbot_labels"]');
-  const mixed = await dp.getAttribute('#context-menu a[href*="niimbot_labels"]', 'href');
-  check('mixed selection keeps only printable issues', mixed === '/projects/sklad/niimbot_labels?ids=1', mixed);
+  await dp.waitForSelector('#context-menu ul');
+  check('no context menu item any more', await dp.locator('#context-menu a[href*="niimbot"]').count() === 0);
+  await dp.goto(BASE + '/issues/4');
+  check('not in a project without the module', await dp.locator('.niimbot-sidebar').count() === 0);
 
-  // A member's access follows the role permission.
+  // Admins are told when QR codes would point elsewhere than this host.
+  const viaIp = BASE.replace('localhost', '127.0.0.1');
+  if (viaIp !== BASE) {
+    const ipc = await browser.newContext({locale: 'ru-RU'});
+    const ip = await ipc.newPage();
+    await login(ip, 'admin', 'admin12345', viaIp);
+    await ip.goto(viaIp + '/issues/1');
+    check('admin sees host warning when opened via another host', await ip.locator('.niimbot-warning').count() === 1, await ip.locator('.niimbot-warning').textContent().catch(() => null));
+    await ipc.close();
+  }
+
+  // ---- a member's access follows the role permission
   const member = await browser.newContext({locale: 'ru-RU'});
   const mp = await member.newPage();
   await login(mp, 'ivan', 'ivan12345');
   await mp.goto(BASE + '/issues/1');
-  check('member with the permission sees the print button', await mp.locator('.niimbot-issue').count() === 1);
+  check('member with the permission sees the button', await mp.locator('.niimbot-sidebar').count() === 1);
   const setPermission = async (on) => {
     await dp.goto(BASE + '/roles');
     await dp.click('table.roles a:text("Разработчик")');
@@ -247,12 +168,25 @@ function savePng(dataUrl, name) {
   };
   await setPermission(false);
   await mp.goto(BASE + '/issues/1');
-  check('without the permission the button is gone', await mp.locator('.niimbot-issue').count() === 0);
-  resp = await mp.goto(BASE + '/projects/sklad/niimbot_labels');
-  check('...and the print page answers 403', resp.status() === 403, resp.status());
+  check('without the permission the button is gone', await mp.locator('.niimbot-sidebar').count() === 0);
   await setPermission(true);
   await mp.goto(BASE + '/issues/1');
-  check('permission back, button back', await mp.locator('.niimbot-issue').count() === 1);
+  check('permission back, button back', await mp.locator('.niimbot-sidebar').count() === 1);
+
+  // ---- browser without Web Bluetooth
+  const plain = await browser.newContext({locale: 'ru-RU'});
+  await plain.addInitScript(() => Object.defineProperty(navigator, 'bluetooth', {value: undefined}));
+  const p2 = await plain.newPage();
+  await login(p2);
+  await p2.goto(BASE + '/issues/1');
+  await p2.waitForFunction(() => document.querySelector('.niimbot-print').getAttribute('aria-disabled') === 'true');
+  check('without Web Bluetooth the button is disabled with an explanation', true, await statusText(p2));
+
+  // ---- script endpoint
+  const anon = await browser.newContext();
+  const a = await anon.newPage();
+  resp = await a.goto(BASE + '/niimbot_labels/script?v=1');
+  check('script is served to anyone, cacheable', resp.status() === 200 && /max-age=\d{8}, public/.test(resp.headers()['cache-control']), resp.headers()['cache-control']);
 
   check('no JS errors on pages', errors.length === 0, errors);
   await browser.close();
